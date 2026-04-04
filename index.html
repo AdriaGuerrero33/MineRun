@@ -1,0 +1,572 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bad Bunny: Camino al Camp Nou</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #000; overflow: hidden; font-family: 'Arial Black', Arial, sans-serif; }
+#gameCanvas { display: block; }
+#ui {
+  position: fixed; top: 0; left: 0; width: 100%; padding: 15px 20px;
+  display: flex; justify-content: space-between; align-items: center;
+  background: linear-gradient(180deg, rgba(0,0,0,0.8) 0%, transparent 100%);
+  color: #fff; font-size: 18px; font-weight: bold; z-index: 100; pointer-events: none;
+}
+#lives { color: #ff4444; }
+#score { color: #FFD700; }
+#coins { color: #FFD700; }
+#overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.85);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  z-index: 200; color: #fff; text-align: center;
+}
+#overlay h1 { font-size: 48px; color: #FFD700; text-shadow: 0 0 20px #FFD700; margin-bottom: 10px; }
+#overlay p { font-size: 20px; margin: 10px 0; color: #ccc; }
+#overlay .subtitle { font-size: 26px; color: #ff6b6b; margin-bottom: 20px; }
+#startBtn {
+  margin-top: 20px; padding: 15px 40px; font-size: 22px; font-weight: bold;
+  background: linear-gradient(135deg, #FFD700, #ff6b35);
+  color: #000; border: none; border-radius: 50px; cursor: pointer;
+  box-shadow: 0 0 30px rgba(255,215,0,0.5); transition: transform 0.2s;
+}
+#startBtn:hover { transform: scale(1.08); }
+#controls { font-size: 14px; color: #aaa; margin-top: 15px; line-height: 1.8; }
+#msgBox {
+  position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%);
+  background: rgba(0,0,0,0.9); color: #FFD700; font-size: 36px; font-weight: bold;
+  padding: 20px 40px; border-radius: 16px; border: 3px solid #FFD700;
+  z-index: 300; display: none; text-align: center;
+}
+</style>
+</head>
+<body>
+<canvas id="gameCanvas"></canvas>
+<div id="ui">
+  <div id="lives">❤️ Vidas: <span id="livesVal">3</span></div>
+  <div id="score">⭐ Score: <span id="scoreVal">0</span></div>
+  <div id="coins">🪙 Monedas: <span id="coinsVal">0</span></div>
+</div>
+<div id="msgBox"></div>
+<div id="overlay">
+  <h1>🐰 BAD BUNNY</h1>
+  <div class="subtitle">Camino al Camp Nou</div>
+  <p>¡Evita a Anuel AA y llega al estadio para dar el concierto!</p>
+  <button id="startBtn" onclick="startGame()">▶ JUGAR</button>
+  <div id="controls">
+    ← → : Mover &nbsp;|&nbsp; ESPACIO / ↑ : Saltar &nbsp;|&nbsp; Doble salto disponible<br>
+    Recoge 🪙 monedas · Evita a los enemigos · ¡Llega a la bandera!
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+// ─── SCENE SETUP ────────────────────────────────────────────────────────────
+const canvas = document.getElementById('gameCanvas');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+const scene = new THREE.Scene();
+scene.fog = new THREE.Fog(0x87CEEB, 30, 120);
+scene.background = new THREE.Color(0x87CEEB);
+
+const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 200);
+
+function resize() {
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+}
+resize();
+window.addEventListener('resize', resize);
+
+// ─── LIGHTING ───────────────────────────────────────────────────────────────
+const sun = new THREE.DirectionalLight(0xffffff, 1.2);
+sun.position.set(20, 40, 10);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.camera.left = -60; sun.shadow.camera.right = 60;
+sun.shadow.camera.top = 40; sun.shadow.camera.bottom = -10;
+scene.add(sun);
+scene.add(new THREE.AmbientLight(0x88aaff, 0.6));
+
+// ─── HELPERS ────────────────────────────────────────────────────────────────
+function box(w, h, d, color, x, y, z, rx=0, ry=0) {
+  const m = new THREE.Mesh(
+    new THREE.BoxGeometry(w, h, d),
+    new THREE.MeshLambertMaterial({ color })
+  );
+  m.position.set(x, y, z); m.rotation.x = rx; m.rotation.y = ry;
+  m.castShadow = true; m.receiveShadow = true;
+  scene.add(m); return m;
+}
+function cyl(rt, rb, h, segs, color, x, y, z) {
+  const m = new THREE.Mesh(
+    new THREE.CylinderGeometry(rt, rb, h, segs),
+    new THREE.MeshLambertMaterial({ color })
+  );
+  m.position.set(x, y, z); m.castShadow = true;
+  scene.add(m); return m;
+}
+function sphere(r, color, x, y, z) {
+  const m = new THREE.Mesh(
+    new THREE.SphereGeometry(r, 16, 16),
+    new THREE.MeshLambertMaterial({ color })
+  );
+  m.position.set(x, y, z); m.castShadow = true;
+  scene.add(m); return m;
+}
+
+// ─── BAD BUNNY CHARACTER ─────────────────────────────────────────────────────
+function makeBadBunny(x, y, z) {
+  const g = new THREE.Group();
+  // Body
+  const body = box(0.7,0.9,0.5, 0x1a1a2e, 0, 0.45, 0); g.add(body);
+  // Hoodie color accent
+  const hoodie = box(0.72,0.7,0.52, 0xff6b35, 0, 0.5, 0); g.add(hoodie);
+  // Head
+  const head = sphere(0.38, 0xd4956a, 0, 1.25, 0); g.add(head);
+  // Bunny ears
+  const earL = box(0.12, 0.45, 0.08, 0xff6b35, -0.18, 1.75, 0); g.add(earL);
+  const earR = box(0.12, 0.45, 0.08, 0xff6b35,  0.18, 1.75, 0); g.add(earR);
+  const earLi = box(0.07, 0.35, 0.06, 0xff9999, -0.18, 1.75, 0.02); g.add(earLi);
+  const earRi = box(0.07, 0.35, 0.06, 0xff9999,  0.18, 1.75, 0.02); g.add(earRi);
+  // Sunglasses
+  const glL = box(0.18,0.1,0.05, 0x000000, -0.13, 1.28, 0.36); g.add(glL);
+  const glR = box(0.18,0.1,0.05, 0x000000,  0.13, 1.28, 0.36); g.add(glR);
+  const glB = box(0.28,0.04,0.04, 0x333333,  0,    1.28, 0.36); g.add(glB);
+  // Legs
+  const legL = box(0.22,0.55,0.22, 0x1a1a2e, -0.22, -0.28, 0); g.add(legL);
+  const legR = box(0.22,0.55,0.22, 0x1a1a2e,  0.22, -0.28, 0); g.add(legR);
+  // Shoes
+  const shL = box(0.26,0.15,0.35, 0xffffff, -0.22, -0.6, 0.05); g.add(shL);
+  const shR = box(0.26,0.15,0.35, 0xffffff,  0.22, -0.6, 0.05); g.add(shR);
+  // Arms
+  const armL = box(0.18,0.55,0.18, 0xff6b35, -0.48, 0.35, 0); g.add(armL);
+  const armR = box(0.18,0.55,0.18, 0xff6b35,  0.48, 0.35, 0); g.add(armR);
+
+  g.position.set(x, y, z);
+  g.castShadow = true;
+  scene.add(g);
+  return g;
+}
+
+// ─── ANUEL AA ENEMY ──────────────────────────────────────────────────────────
+function makeAnuel(x, y, z) {
+  const g = new THREE.Group();
+  // Body - black outfit
+  box(0.65,0.85,0.45, 0x111111, 0, 0.43, 0); // dummy - use group children
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.65,0.85,0.45), new THREE.MeshLambertMaterial({color:0x111111}));
+  body.position.set(0,0.43,0); g.add(body);
+  // Head
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.36,16,16), new THREE.MeshLambertMaterial({color:0xc68642}));
+  head.position.set(0,1.2,0); g.add(head);
+  // Hair / cap
+  const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.38,0.38,0.15,16), new THREE.MeshLambertMaterial({color:0x000000}));
+  cap.position.set(0,1.47,0); g.add(cap);
+  const capBrim = new THREE.Mesh(new THREE.CylinderGeometry(0.45,0.45,0.06,16), new THREE.MeshLambertMaterial({color:0x000000}));
+  capBrim.position.set(0,1.38,0.05); g.add(capBrim);
+  // Tattoo marks (simple lines on face)
+  const tat = new THREE.Mesh(new THREE.BoxGeometry(0.04,0.18,0.04), new THREE.MeshLambertMaterial({color:0x334466}));
+  tat.position.set(0.15,1.17,0.34); g.add(tat);
+  // Chain
+  const chain = new THREE.Mesh(new THREE.TorusGeometry(0.2,0.03,8,16), new THREE.MeshLambertMaterial({color:0xFFD700}));
+  chain.position.set(0,0.78,0.28); chain.rotation.x = Math.PI/2; g.add(chain);
+  // Legs
+  const lL = new THREE.Mesh(new THREE.BoxGeometry(0.22,0.55,0.22), new THREE.MeshLambertMaterial({color:0x111111}));
+  lL.position.set(-0.2,-0.28,0); g.add(lL);
+  const lR = new THREE.Mesh(new THREE.BoxGeometry(0.22,0.55,0.22), new THREE.MeshLambertMaterial({color:0x111111}));
+  lR.position.set(0.2,-0.28,0); g.add(lR);
+  // Shoes
+  const sL = new THREE.Mesh(new THREE.BoxGeometry(0.26,0.14,0.34), new THREE.MeshLambertMaterial({color:0xffffff}));
+  sL.position.set(-0.2,-0.6,0.05); g.add(sL);
+  const sR = new THREE.Mesh(new THREE.BoxGeometry(0.26,0.14,0.34), new THREE.MeshLambertMaterial({color:0xffffff}));
+  sR.position.set(0.2,-0.6,0.05); g.add(sR);
+  // Arms
+  const aL = new THREE.Mesh(new THREE.BoxGeometry(0.18,0.5,0.18), new THREE.MeshLambertMaterial({color:0x111111}));
+  aL.position.set(-0.46,0.3,0); g.add(aL);
+  const aR = new THREE.Mesh(new THREE.BoxGeometry(0.18,0.5,0.18), new THREE.MeshLambertMaterial({color:0x111111}));
+  aR.position.set(0.46,0.3,0); g.add(aR);
+
+  g.position.set(x, y, z);
+  scene.add(g);
+
+  return {
+    mesh: g,
+    dir: 1,
+    speed: 0.025 + Math.random()*0.02,
+    minX: x - 3, maxX: x + 3,
+    dead: false,
+    bounceTime: 0
+  };
+}
+
+// ─── COIN ─────────────────────────────────────────────────────────────────────
+function makeCoin(x, y, z) {
+  const m = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.2, 0.2, 0.08, 16),
+    new THREE.MeshLambertMaterial({ color: 0xFFD700, emissive: 0xaa7700 })
+  );
+  m.position.set(x, y, z); m.rotation.x = Math.PI/2;
+  scene.add(m);
+  return { mesh: m, collected: false };
+}
+
+// ─── STAR (end goal flag) ────────────────────────────────────────────────────
+function makeFlag(x, y, z) {
+  const pole = cyl(0.05, 0.05, 5, 8, 0x888888, x, y+2.5, z);
+  const flag = box(1.2, 0.7, 0.08, 0xff0000, x+0.6, y+5.1, z);
+  const txt = box(1.18, 0.65, 0.09, 0xffffff, x+0.6, y+5.1, z+0.01);
+  // mini stadium box behind flag
+  const stadium = makeStadium(x+4, y, z);
+  return { pole, flag, x, y: y+0.1, z };
+}
+
+function makeStadium(x, y, z) {
+  // Camp Nou simplified
+  const base = box(8, 0.4, 6, 0x4455aa, x, y+0.2, z);
+  const wallF = box(8, 3, 0.3, 0x3344aa, x, y+1.7, z-3);
+  const wallB = box(8, 3, 0.3, 0x3344aa, x, y+1.7, z+3);
+  const wallL = box(0.3, 3, 6, 0x3344aa, x-4, y+1.7, z);
+  const wallR = box(0.3, 3, 6, 0x3344aa, x+4, y+1.7, z);
+  const roof  = box(9, 0.3, 7, 0x8899cc, x, y+3.3, z);
+  const pitch = box(6, 0.1, 4, 0x2d8a2d, x, y+0.45, z);
+  // Sign
+  const sign = box(3, 0.8, 0.2, 0x0055aa, x, y+3.0, z-3.1);
+  // "CAMP NOU" letters approximated as white boxes
+  for(let i=0;i<5;i++) box(0.25,0.5,0.1,0xffffff, x-1.2+i*0.6, y+3.0, z-3.22);
+  return base;
+}
+
+// ─── LEVEL LAYOUT ────────────────────────────────────────────────────────────
+const platforms = [];
+const enemies = [];
+const coins = [];
+let flagObj = null;
+let player = null;
+
+const PLATFORM_DATA = [
+  // [x, y, z, width, height, depth, color]
+  [0,   -0.5, 0, 12, 0.5, 4, 0x4CAF50],   // start ground
+  [14,  -0.5, 0, 6,  0.5, 4, 0x4CAF50],
+  [14,   2.0, 0, 3,  0.5, 4, 0x8BC34A],
+  [20,   0.5, 0, 5,  0.5, 4, 0x4CAF50],
+  [27,   1.5, 0, 4,  0.5, 4, 0x66BB6A],
+  [33,  -0.5, 0, 8,  0.5, 4, 0x4CAF50],
+  [43,   0.0, 0, 5,  0.5, 4, 0x4CAF50],
+  [50,   2.0, 0, 4,  0.5, 4, 0x81C784],
+  [56,   0.5, 0, 5,  0.5, 4, 0x4CAF50],
+  [64,   1.5, 0, 6,  0.5, 4, 0x66BB6A],
+  [72,  -0.5, 0, 10, 0.5, 4, 0x4CAF50],   // final ground
+];
+
+const ENEMY_DATA = [
+  [15, 0.1], [22, 1.1], [34, 0.1], [37, 0.1],
+  [44, 0.6], [57, 1.1], [65, 2.1], [73, 0.1], [78, 0.1]
+];
+
+const COIN_DATA = [
+  [6,1.2], [8,1.2], [10,1.2],
+  [14,3.7], [16,3.7],
+  [21,2.2], [23,2.2],
+  [28,3.2], [30,3.2],
+  [35,1.2], [38,1.2],
+  [44,1.7], [46,1.7],
+  [51,3.7], [53,3.7],
+  [58,2.2], [60,2.2],
+  [65,3.2], [67,3.2],
+  [73,1.2], [75,1.2], [77,1.2]
+];
+
+// decorative trees & clouds
+function makeTree(x, y, z) {
+  cyl(0.12,0.15,1.2,8,0x6d4c41, x, y+0.6, z);
+  sphere(0.5, 0x2e7d32, x, y+1.7, z);
+  sphere(0.4, 0x388e3c, x+0.3, y+1.5, z);
+  sphere(0.4, 0x2e7d32, x-0.3, y+1.4, z);
+}
+function makeCloud(x, y, z) {
+  const mat = new THREE.MeshLambertMaterial({color:0xffffff});
+  [[-0.5,0,0],[0,0.2,0],[0.5,0,0],[0.25,-0.15,0],[-0.25,-0.15,0]].forEach(([dx,dy,dz])=>{
+    const s = new THREE.Mesh(new THREE.SphereGeometry(0.5+Math.random()*0.3,8,8), mat);
+    s.position.set(x+dx*1.5, y+dy*1.5, z+dz); scene.add(s);
+  });
+}
+
+// ─── GAME STATE ───────────────────────────────────────────────────────────────
+let gameRunning = false;
+let score = 0, lives = 3, coinCount = 0;
+let velY = 0, jumps = 0;
+const GRAVITY = -0.018, JUMP_FORCE = 0.28;
+const keys = {};
+let invincible = 0;
+let gameOver = false;
+let won = false;
+let legAngle = 0;
+
+document.addEventListener('keydown', e => { keys[e.code] = true; });
+document.addEventListener('keyup',   e => { keys[e.code] = false; });
+
+function showMsg(txt, dur=2000) {
+  const el = document.getElementById('msgBox');
+  el.textContent = txt; el.style.display = 'block';
+  setTimeout(() => el.style.display = 'none', dur);
+}
+
+function buildLevel() {
+  // Clear old objects (keep only new ones)
+  platforms.length = 0; enemies.length = 0; coins.length = 0;
+
+  // Ground floor (infinite-ish visual)
+  box(200, 0.2, 6, 0x388e3c, 40, -1.1, 0);
+
+  // Sky gradient via background already set
+  // Clouds
+  for(let i=0;i<12;i++) makeCloud(Math.random()*90-5, 8+Math.random()*5, -8+Math.random()*4);
+
+  // Platforms
+  PLATFORM_DATA.forEach(([x,y,z,w,h,d,c]) => {
+    const m = box(w, h, d, c, x, y, z);
+    platforms.push({ mesh:m, x, y: y+h/2, z, w, h, d });
+  });
+
+  // Trees
+  [-2,2,11,17,23,31,39,45,52,60,68,75,80].forEach(x => makeTree(x,-0.9,-2.5+Math.random()));
+
+  // Enemies
+  ENEMY_DATA.forEach(([ex, ey]) => {
+    const e = makeAnuel(ex, ey, 0);
+    enemies.push(e);
+  });
+
+  // Coins
+  COIN_DATA.forEach(([cx, cy]) => {
+    coins.push(makeCoin(cx, cy, 0));
+  });
+
+  // End flag
+  flagObj = makeFlag(82, -0.25, 0);
+
+  // Player
+  player = makeBadBunny(0, 1.5, 0);
+}
+
+function startGame() {
+  document.getElementById('overlay').style.display = 'none';
+  score = 0; lives = 3; coinCount = 0;
+  velY = 0; jumps = 0; invincible = 0;
+  gameOver = false; won = false;
+  updateUI();
+  buildLevel();
+  gameRunning = true;
+  animate();
+}
+
+function updateUI() {
+  document.getElementById('livesVal').textContent = lives;
+  document.getElementById('scoreVal').textContent = score;
+  document.getElementById('coinsVal').textContent = coinCount;
+}
+
+function resetPlayer() {
+  player.position.set(0, 1.5, 0);
+  velY = 0; jumps = 0;
+}
+
+// ─── COLLISION ────────────────────────────────────────────────────────────────
+function onPlatform() {
+  const px = player.position.x, py = player.position.y, pz = player.position.z;
+  const feet = py - 0.68;
+  for(const p of platforms) {
+    if(Math.abs(px - p.x) < p.w/2 + 0.28 &&
+       Math.abs(pz - p.z) < p.d/2 + 0.2 &&
+       feet <= p.y + 0.12 && feet >= p.y - 0.35 && velY <= 0) {
+      return p.y;
+    }
+  }
+  return null;
+}
+
+// ─── MAIN LOOP ───────────────────────────────────────────────────────────────
+let lastTime = 0;
+function animate(ts = 0) {
+  if(!gameRunning) return;
+  requestAnimationFrame(animate);
+
+  const dt = Math.min(ts - lastTime, 50); lastTime = ts;
+
+  if(gameOver || won) { renderer.render(scene, camera); return; }
+
+  // ── Player movement
+  const speed = 0.09;
+  if(keys['ArrowLeft']  || keys['KeyA']) player.position.x -= speed;
+  if(keys['ArrowRight'] || keys['KeyD']) player.position.x += speed;
+
+  // Jump
+  if((keys['Space'] || keys['ArrowUp'] || keys['KeyW']) && jumps < 2) {
+    if(!keys['_jumpHeld']) {
+      velY = JUMP_FORCE;
+      jumps++;
+      keys['_jumpHeld'] = true;
+    }
+  } else if(!keys['Space'] && !keys['ArrowUp'] && !keys['KeyW']) {
+    keys['_jumpHeld'] = false;
+  }
+
+  velY += GRAVITY;
+  player.position.y += velY;
+
+  // Platform collision
+  const groundY = onPlatform();
+  if(groundY !== null) {
+    player.position.y = groundY + 0.68;
+    velY = 0; jumps = 0;
+  }
+
+  // Fall death
+  if(player.position.y < -6) {
+    lives--;
+    updateUI();
+    if(lives <= 0) { triggerGameOver(); return; }
+    showMsg('💀 ¡Cuidado!');
+    resetPlayer();
+  }
+
+  // Clamp player Z
+  player.position.z = 0;
+
+  // Leg animation
+  legAngle += 0.15;
+  const walking = Math.abs(keys['ArrowLeft']||keys['ArrowRight']||keys['KeyA']||keys['KeyD']) > 0;
+  if(walking) {
+    const legs = [2, 3]; // index in group children (legL, legR)
+    player.children[9].rotation.x =  Math.sin(legAngle)*0.5; // legL
+    player.children[10].rotation.x = -Math.sin(legAngle)*0.5; // legR
+  }
+
+  // Face direction
+  if(keys['ArrowLeft']  || keys['KeyA']) player.rotation.y =  Math.PI/8;
+  if(keys['ArrowRight'] || keys['KeyD']) player.rotation.y = -Math.PI/8;
+
+  // ── Enemies
+  enemies.forEach(en => {
+    if(en.dead) return;
+    en.mesh.position.x += en.dir * en.speed;
+    if(en.mesh.position.x > en.maxX || en.mesh.position.x < en.minX) en.dir *= -1;
+    en.mesh.rotation.y = en.dir > 0 ? 0 : Math.PI;
+
+    // Bounce on enemy head
+    const ex = en.mesh.position.x, ey = en.mesh.position.y + 0.68;
+    const dx = Math.abs(player.position.x - ex);
+    const dy = player.position.y - ey;
+    const dz = Math.abs(player.position.z - en.mesh.position.z);
+    if(dx < 0.7 && dz < 0.8) {
+      if(dy > 0.1 && dy < 0.9 && velY < 0) {
+        // stomp
+        scene.remove(en.mesh);
+        en.dead = true;
+        velY = JUMP_FORCE * 0.8;
+        score += 200;
+        updateUI();
+        showMsg('🔥 ¡Anuel eliminado! +200');
+      } else if(invincible <= 0) {
+        // hit
+        lives--;
+        invincible = 120;
+        updateUI();
+        if(lives <= 0) { triggerGameOver(); return; }
+        velY = JUMP_FORCE * 0.5;
+        showMsg('💥 ¡Te golpeó Anuel! ❤️ -1');
+      }
+    }
+  });
+
+  if(invincible > 0) {
+    invincible--;
+    player.visible = invincible % 8 < 4;
+  } else {
+    player.visible = true;
+  }
+
+  // ── Coins
+  coins.forEach(c => {
+    if(c.collected) return;
+    c.mesh.rotation.z += 0.05;
+    const dx = Math.abs(player.position.x - c.mesh.position.x);
+    const dy = Math.abs(player.position.y - c.mesh.position.y);
+    const dz = Math.abs(player.position.z - c.mesh.position.z);
+    if(dx < 0.5 && dy < 0.8 && dz < 0.6) {
+      c.collected = true;
+      scene.remove(c.mesh);
+      coinCount++;
+      score += 50;
+      updateUI();
+    }
+  });
+
+  // ── Win condition (reach flag)
+  if(flagObj && Math.abs(player.position.x - flagObj.x) < 2.5 &&
+     player.position.y > flagObj.y - 1) {
+    triggerWin();
+    return;
+  }
+
+  // ── Camera follow
+  camera.position.x = player.position.x + 3;
+  camera.position.y = player.position.y + 5;
+  camera.position.z = 14;
+  camera.lookAt(player.position.x + 2, player.position.y + 1, 0);
+
+  renderer.render(scene, camera);
+}
+
+function triggerGameOver() {
+  gameOver = true; gameRunning = false;
+  document.getElementById('overlay').innerHTML = `
+    <h1>💀 GAME OVER</h1>
+    <div class="subtitle">Anuel te paró el concierto...</div>
+    <p>Score: ${score} | Monedas: ${coinCount}</p>
+    <button class="startBtn" id="startBtn" onclick="location.reload()" style="margin-top:20px;padding:15px 40px;font-size:22px;font-weight:bold;background:linear-gradient(135deg,#ff4444,#ff0000);color:#fff;border:none;border-radius:50px;cursor:pointer;">🔄 Reintentar</button>
+  `;
+  document.getElementById('overlay').style.display = 'flex';
+}
+
+function triggerWin() {
+  won = true; gameRunning = false;
+  score += coinCount * 10 + lives * 500;
+  document.getElementById('overlay').innerHTML = `
+    <h1>🎉 ¡CONCIERTO!</h1>
+    <div class="subtitle">¡Bad Bunny llega al Camp Nou! 🏟️</div>
+    <p>🏆 Score Final: ${score}</p>
+    <p>🪙 Monedas: ${coinCount} | ❤️ Vidas: ${lives}</p>
+    <p style="color:#FFD700;font-size:22px;margin-top:10px">¡EL ESTADIO EXPLOTA! 🔥🐰🔥</p>
+    <button id="startBtn" onclick="location.reload()" style="margin-top:20px;padding:15px 40px;font-size:22px;font-weight:bold;background:linear-gradient(135deg,#FFD700,#ff6b35);color:#000;border:none;border-radius:50px;cursor:pointer;">🔄 Jugar de nuevo</button>
+  `;
+  document.getElementById('overlay').style.display = 'flex';
+}
+
+// Mobile controls
+const mobileStyle = `
+  position:fixed;bottom:20px;padding:16px 28px;font-size:28px;
+  background:rgba(255,255,255,0.25);border:2px solid rgba(255,255,255,0.5);
+  border-radius:50%;color:#fff;cursor:pointer;z-index:150;user-select:none;
+`;
+function addMobileBtn(label, code, styleExtra) {
+  const btn = document.createElement('button');
+  btn.textContent = label;
+  btn.style.cssText = mobileStyle + styleExtra;
+  btn.addEventListener('touchstart', e=>{ e.preventDefault(); keys[code]=true; });
+  btn.addEventListener('touchend',   e=>{ e.preventDefault(); keys[code]=false; });
+  document.body.appendChild(btn);
+}
+if('ontouchstart' in window) {
+  addMobileBtn('◀', 'ArrowLeft',  'left:20px;');
+  addMobileBtn('▶', 'ArrowRight', 'left:110px;');
+  addMobileBtn('⬆', 'Space',      'right:20px;');
+}
+</script>
+</body>
+</html>
