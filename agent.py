@@ -2,14 +2,15 @@
 """
 MineRun – Agente de seguimiento automático
 ===========================================
-Se ejecuta en segundo plano en tu PC.
+Corre en Railway (o en tu PC) en segundo plano.
 Revisa el Google Sheet cada cierto intervalo y envía
 un correo de seguimiento a cada contacto nuevo.
 
-Arrancar manualmente:   python agent.py
-Instalar como servicio: install.bat
+Railway: configura las variables de entorno en el dashboard.
+Local:   usa el archivo .env y credentials.json.
 """
 
+import json
 import logging
 import os
 import smtplib
@@ -64,9 +65,21 @@ log = logging.getLogger("MineRunAgent")
 # Utilidades
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _google_credentials() -> Credentials:
+    """
+    Lee las credenciales de Google en este orden:
+    1. Variable de entorno GOOGLE_CREDENTIALS_JSON (Railway)
+    2. Archivo credentials.json local (PC)
+    """
+    raw = os.getenv("GOOGLE_CREDENTIALS_JSON")
+    if raw:
+        info = json.loads(raw)
+        return Credentials.from_service_account_info(info, scopes=SCOPES)
+    return Credentials.from_service_account_file(str(CREDENTIALS_FILE), scopes=SCOPES)
+
+
 def get_worksheet() -> gspread.Worksheet:
-    creds = Credentials.from_service_account_file(str(CREDENTIALS_FILE), scopes=SCOPES)
-    client = gspread.authorize(creds)
+    client = gspread.authorize(_google_credentials())
     return client.open_by_key(SHEET_ID).worksheet(SHEET_NAME)
 
 
