@@ -2,3 +2,4 @@ gspread==6.1.2
 google-auth==2.29.0
 python-dotenv==1.0.1
 requests==2.32.3
+gTTS==2.5.1
