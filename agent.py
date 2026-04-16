@@ -128,7 +128,10 @@ def check_imap_replies(contacted_emails: set[str]) -> list[str]:
     since = (datetime.now() - timedelta(days=7)).strftime("%d-%b-%Y")
 
     try:
-        mail = imaplib.IMAP4(IMAP_HOST, IMAP_PORT)
+        if IMAP_PORT == 993:
+            mail = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT)
+        else:
+            mail = imaplib.IMAP4(IMAP_HOST, IMAP_PORT)
         mail.login(SMTP_USER, SMTP_PASS)
         mail.select("INBOX")
 
