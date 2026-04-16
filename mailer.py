@@ -139,15 +139,19 @@ el asunto "BAJA" y te eliminamos de inmediato.
 
 
 def open_smtp_connection():
-    """Return an authenticated SMTP connection (SSL or STARTTLS)."""
-    if SMTP_PORT == 587:
+    """Return an authenticated SMTP connection (SSL, STARTTLS, or plain)."""
+    if SMTP_PORT == 465:
+        conn = smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=30)
+    elif SMTP_PORT == 587:
         ctx = ssl.create_default_context()
         conn = smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30)
         conn.ehlo()
         conn.starttls(context=ctx)
         conn.ehlo()
     else:
-        conn = smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=30)
+        # Puerto 25 u otro: SMTP plano sin cifrado
+        conn = smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30)
+        conn.ehlo()
 
     conn.login(SMTP_USER, SMTP_PASS)
     return conn

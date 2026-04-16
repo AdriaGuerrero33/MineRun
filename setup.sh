@@ -83,13 +83,15 @@ python3 - <<PYEOF
 import os, smtplib, ssl
 from dotenv import load_dotenv
 load_dotenv()
-host = os.getenv('SMTP_HOST'); port = int(os.getenv('SMTP_PORT', 465))
+host = os.getenv('SMTP_HOST'); port = int(os.getenv('SMTP_PORT', 25))
 user = os.getenv('SMTP_USER'); pwd  = os.getenv('SMTP_PASS')
 try:
-    if port == 587:
-        s = smtplib.SMTP(host, port, timeout=10); s.starttls()
-    else:
+    if port == 465:
         s = smtplib.SMTP_SSL(host, port, timeout=10)
+    elif port == 587:
+        s = smtplib.SMTP(host, port, timeout=10); s.ehlo(); s.starttls(); s.ehlo()
+    else:
+        s = smtplib.SMTP(host, port, timeout=10); s.ehlo()
     s.login(user, pwd); s.quit()
     print("SMTP OK")
 except Exception as e:
