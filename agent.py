@@ -36,7 +36,7 @@ load_dotenv(BASE_DIR / ".env")
 
 # ── Config SMTP / IMAP ────────────────────────────────────────────────────────
 SMTP_HOST        = os.getenv("SMTP_HOST", "correo.hostalia.com")
-SMTP_PORT        = int(os.getenv("SMTP_PORT", "587"))
+SMTP_PORT        = int(os.getenv("SMTP_PORT", "465"))
 SMTP_USER        = os.getenv("SMTP_USER", "")
 SMTP_PASS        = os.getenv("SMTP_PASS", "")
 FROM_NAME        = os.getenv("FROM_NAME", "Reseñas Plus")
@@ -329,6 +329,11 @@ def run_cycle():
 
     if pending_rows:
         log.info(f"{len(pending_rows)} contacto(s) nuevos a enviar.")
+        if not SMTP_USER or not SMTP_PASS:
+            msg = "SMTP_USER o SMTP_PASS no están configurados. Revisa el fichero .env."
+            log.error(msg)
+            send_telegram_text(f"🚨 <b>Agente Email Marketing</b>\n{msg}")
+            return
         try:
             smtp  = open_smtp()
             stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
