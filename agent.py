@@ -161,10 +161,11 @@ def _manual_send(target_email: str | None = None) -> None:
     seq_col   = ensure_column(sheet, headers, COL_SEQ)
     reply_col = ensure_column(sheet, headers, COL_REPLIED)
 
-    stamp   = datetime.now().strftime("%Y-%m-%d %H:%M")
-    sent    = 0
-    errors  = 0
-    skipped = 0
+    stamp      = datetime.now().strftime("%Y-%m-%d %H:%M")
+    sent       = 0
+    errors     = 0
+    skipped    = 0
+    first_err  = ""
 
     for row_idx, row in enumerate(records, start=2):
         email_val   = str(row.get(COL_EMAIL, "")).strip().lower()
@@ -187,8 +188,11 @@ def _manual_send(target_email: str | None = None) -> None:
             sheet.update_cell(row_idx, seq_col, seq_next)
             log.info(f"  [manual] ✓  {email_val}  [email #{seq_next}]")
             sent += 1
+            time.sleep(1)   # 1 email/segundo para no superar el rate limit de Brevo
         except Exception as exc:
             log.error(f"  [manual] ✗  {email_val}: {exc}")
+            if not first_err:
+                first_err = str(exc)
             errors += 1
 
     if target_email and sent == 0 and errors == 0:
@@ -199,7 +203,8 @@ def _manual_send(target_email: str | None = None) -> None:
         f"✅ <b>Envío manual completado</b>\n\n"
         f"✉️ Enviados: <b>{sent}</b>\n"
         f"❌ Errores: <b>{errors}</b>\n"
-        + (f"⏭ Omitidos (ya respondieron): <b>{skipped}</b>" if skipped else "")
+        + (f"⏭ Omitidos (ya respondieron): <b>{skipped}</b>\n" if skipped else "")
+        + (f"\n⚠️ Primer error: <code>{first_err}</code>" if first_err else "")
     )
     send_telegram_text(resumen)
 
@@ -740,6 +745,7 @@ def run_cycle():
                 contacted_emails.add(email_val)
                 log.info(f"  ✓  {email_val}  [email #{seq_next}]")
                 sent += 1
+                time.sleep(1)   # respetar rate limit de Brevo
             except Exception as exc:
                 log.error(f"  ✗  {email_val}: {exc}")
                 errors += 1
