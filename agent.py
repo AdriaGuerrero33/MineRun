@@ -57,13 +57,15 @@ COL_EMAIL        = os.getenv("COL_EMAIL", "Email")
 COL_PRODUCT      = os.getenv("COL_PRODUCT", "Producto")
 COL_SENT         = "Enviado"
 COL_REPLIED      = "Contestado"
+COL_SEQ          = "Secuencia"   # nº de email enviado: 1, 2 o 3
 
 # ── Config Telegram ───────────────────────────────────────────────────────────
 TELEGRAM_TOKEN   = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
 # ── Intervalo ─────────────────────────────────────────────────────────────────
-CHECK_INTERVAL_H = int(os.getenv("CHECK_INTERVAL_HOURS", "168"))
+CHECK_INTERVAL_H = int(os.getenv("CHECK_INTERVAL_HOURS", "12"))
+MIN_DAYS_BETWEEN = int(os.getenv("MIN_DAYS_BETWEEN_EMAILS", "3"))   # mín. días entre emails
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
@@ -289,43 +291,121 @@ def ensure_column(sheet: gspread.Worksheet, headers: list, name: str) -> int:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Helpers de calendario y fecha
+# ─────────────────────────────────────────────────────────────────────────────
+
+def is_send_day() -> bool:
+    """Devuelve True si hoy es lunes (0) o jueves (3)."""
+    return datetime.now().weekday() in (0, 3)
+
+
+def days_since(date_str: str) -> int:
+    """Días transcurridos desde la fecha almacenada en el sheet."""
+    if not date_str:
+        return 999
+    try:
+        d = datetime.strptime(date_str.strip(), "%Y-%m-%d %H:%M")
+        return (datetime.now() - d).days
+    except Exception:
+        return 999
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Email
 # ─────────────────────────────────────────────────────────────────────────────
 
-def build_email(to_email: str, product: str) -> MIMEMultipart:
-    subject = "¿Al final lo descartasteis o seguís interesados?"
+def build_email(to_email: str, product: str, seq: int = 1) -> MIMEMultipart:
+    # ── Selección de template según nº de email en la secuencia ─────────────
+    if seq == 1:
+        # Email 1 — Re-engagement: ¿siguen interesados?
+        subject = "¿Al final lo descartasteis o seguís interesados?"
+        body_text = (
+            "Hola,\n\n"
+            "Hace un tiempo estuvisteis mirando lo de conseguir más reseñas en Google.\n\n"
+            "Y luego... nada.\n\n"
+            "No sé si al final lo descartasteis o simplemente se quedó pendiente.\n\n"
+            "Si ya no es algo que os interese, sin problema, me lo decís y no os molesto más.\n\n"
+            "Y si seguís pensando en ello, podemos hablar cinco minutos "
+            "y os cuento exactamente cómo funciona y qué resultados están consiguiendo "
+            "otros negocios como el vuestro.\n\n"
+            "Sin compromisos. Solo una conversación.\n\n"
+            "¿Seguís interesados?\n\n"
+        )
+        body_html = (
+            "<p>Hola,</p>"
+            "<p>Hace un tiempo estuvisteis mirando lo de conseguir más reseñas en Google.</p>"
+            "<p>Y luego... nada.</p>"
+            "<p>No sé si al final lo descartasteis o simplemente se quedó pendiente.</p>"
+            "<p>Si ya no es algo que os interese, sin problema, me lo decís y no os molesto más.</p>"
+            "<p>Y si seguís pensando en ello, podemos hablar cinco minutos "
+            "y os cuento exactamente cómo funciona y qué resultados están consiguiendo "
+            "otros negocios como el vuestro.</p>"
+            "<p>Sin compromisos. Solo una conversación.</p>"
+            '<p style="font-weight:bold;">¿Seguís interesados?</p>'
+        )
 
-    body_text = (
-        f"Hola,\n\n"
-        f"Hace un tiempo estuvisteis mirando lo de conseguir más reseñas en Google.\n\n"
-        f"Y luego... nada.\n\n"
-        f"No sé si al final lo descartasteis o simplemente se quedó pendiente.\n\n"
-        f"Si ya no es algo que os interese, sin problema, me lo decís y no os molesto más.\n\n"
-        f"Y si seguís pensando en ello, podemos hablar cinco minutos "
-        f"y os cuento exactamente cómo funciona y qué resultados están consiguiendo "
-        f"otros negocios como el vuestro.\n\n"
-        f"Sin compromisos. Solo una conversación.\n\n"
-        f"¿Seguís interesados?\n\n"
+    elif seq == 2:
+        # Email 2 — Prueba social: resultados reales de otros clientes
+        subject = "Lo que están consiguiendo otros negocios como el vuestro"
+        body_text = (
+            "Hola,\n\n"
+            "La semana pasada os escribí y no tuve respuesta.\n\n"
+            "Normal. Hay mil cosas.\n\n"
+            "Pero quería contaros algo antes de dejarlo.\n\n"
+            "Un restaurante con el que trabajamos pasó de 38 a 140 reseñas en Google en 45 días.\n\n"
+            "Una clínica dental empezó a aparecer en el top 3 de Google Maps "
+            "en su zona. Antes ni salía.\n\n"
+            "No es magia. Es un sistema que funciona porque los clientes "
+            "que ya están contentos simplemente no saben que pueden ayudaros con una reseña.\n\n"
+            "Nosotros les recordamos por vosotros.\n\n"
+            "¿Tiene sentido hablar diez minutos para ver si os encaja?\n\n"
+        )
+        body_html = (
+            "<p>Hola,</p>"
+            "<p>La semana pasada os escribí y no tuve respuesta.</p>"
+            "<p>Normal. Hay mil cosas.</p>"
+            "<p>Pero quería contaros algo antes de dejarlo.</p>"
+            "<p>Un restaurante con el que trabajamos pasó de <strong>38 a 140 reseñas</strong> "
+            "en Google en 45 días.</p>"
+            "<p>Una clínica dental empezó a aparecer en el <strong>top 3 de Google Maps</strong> "
+            "en su zona. Antes ni salía.</p>"
+            "<p>No es magia. Es un sistema que funciona porque los clientes "
+            "que ya están contentos simplemente no saben que pueden ayudaros con una reseña.</p>"
+            "<p>Nosotros les recordamos por vosotros.</p>"
+            '<p style="font-weight:bold;">¿Tiene sentido hablar diez minutos para ver si os encaja?</p>'
+        )
+
+    else:
+        # Email 3 — Breakup email: último mensaje
+        subject = "Último mensaje"
+        body_text = (
+            "Hola,\n\n"
+            "Os he escrito un par de veces y no hemos conseguido conectar.\n\n"
+            "Lo entiendo. No siempre es el momento.\n\n"
+            "Este es mi último mensaje.\n\n"
+            "Si algún día las reseñas en Google se convierten en una prioridad, "
+            "aquí estaremos. Solo tenéis que escribirnos.\n\n"
+            "Suerte con todo.\n\n"
+        )
+        body_html = (
+            "<p>Hola,</p>"
+            "<p>Os he escrito un par de veces y no hemos conseguido conectar.</p>"
+            "<p>Lo entiendo. No siempre es el momento.</p>"
+            "<p>Este es mi último mensaje.</p>"
+            "<p>Si algún día las reseñas en Google se convierten en una prioridad, "
+            "aquí estaremos. Solo tenéis que escribirnos.</p>"
+            "<p>Suerte con todo.</p>"
+        )
+
+    # ── Firma común ───────────────────────────────────────────────────────────
+    firma_text = (
         f"Un saludo,\n\n"
         f"El equipo de {FROM_NAME}\n"
         f"+34 611 00 50 18 (WhatsApp y llamadas)\n\n"
         f"─────────────────────────────────────────────\n"
         f"Si no quieres saber más de nosotros, responde con el asunto \"BAJA\".\n"
     )
-
-    body_html = (
-        f'<html><body style="font-family:Georgia,serif;font-size:16px;color:#222;'
-        f'max-width:580px;margin:0 auto;line-height:1.7;">'
-        f"<p>Hola,</p>"
-        f"<p>Hace un tiempo estuvisteis mirando lo de conseguir más reseñas en Google.</p>"
-        f"<p>Y luego... nada.</p>"
-        f"<p>No sé si al final lo descartasteis o simplemente se quedó pendiente.</p>"
-        f"<p>Si ya no es algo que os interese, sin problema, me lo decís y no os molesto más.</p>"
-        f"<p>Y si seguís pensando en ello, podemos hablar cinco minutos "
-        f"y os cuento exactamente cómo funciona y qué resultados están consiguiendo "
-        f"otros negocios como el vuestro.</p>"
-        f"<p>Sin compromisos. Solo una conversación.</p>"
-        f'<p style="font-weight:bold;">¿Seguís interesados?</p>'
+    firma_html = (
         f"<p>Un saludo,</p>"
         f'<p><strong>El equipo de {FROM_NAME}</strong><br/>'
         f'<a href="https://wa.me/34611005018" style="color:#222;text-decoration:none;">'
@@ -334,14 +414,20 @@ def build_email(to_email: str, product: str) -> MIMEMultipart:
         f'<hr style="border:none;border-top:1px solid #eee;margin-top:40px;"/>'
         f'<p style="font-size:11px;color:#bbb;">Si no quieres saber más de nosotros, '
         f"responde con el asunto <em>BAJA</em>.</p>"
+    )
+
+    full_html = (
+        f'<html><body style="font-family:Georgia,serif;font-size:16px;color:#222;'
+        f'max-width:580px;margin:0 auto;line-height:1.7;">'
+        + body_html + firma_html +
         f"</body></html>"
     )
     msg            = MIMEMultipart("alternative")
     msg["Subject"] = subject
     msg["From"]    = f"{FROM_NAME} <{SMTP_USER}>"
     msg["To"]      = to_email
-    msg.attach(MIMEText(body_text, "plain", "utf-8"))
-    msg.attach(MIMEText(body_html, "html", "utf-8"))
+    msg.attach(MIMEText(body_text + firma_text, "plain", "utf-8"))
+    msg.attach(MIMEText(full_html, "html", "utf-8"))
     return msg
 
 
@@ -458,52 +544,69 @@ def run_cycle():
     total     = len(records)
     sent_col  = ensure_column(sheet, headers, COL_SENT)
     reply_col = ensure_column(sheet, headers, COL_REPLIED)
+    seq_col   = ensure_column(sheet, headers, COL_SEQ)
 
-    pending_rows     = []
+    hoy_es_dia_envio = is_send_day()
+    log.info(f"Hoy es {'lunes/jueves ✓ — se enviarán emails' if hoy_es_dia_envio else 'día de solo monitorización (no se envían emails)'}.")
+
+    pending_rows     = []   # (row_idx, email, product, seq_next)
     contacted_emails = set()
     already_replied  = set()
 
     for row_idx, row in enumerate(records, start=2):
         email_val   = str(row.get(COL_EMAIL, "")).strip().lower()
-        product     = str(row.get(COL_PRODUCT, "nuestros servicios")).strip() or "nuestros servicios"
         was_sent    = str(row.get(COL_SENT, "")).strip()
         was_replied = str(row.get(COL_REPLIED, "")).strip()
+        seq         = int(str(row.get(COL_SEQ, "") or "0"))
 
         if not email_val or "@" not in email_val:
             continue
-        if was_sent:
+        if seq >= 1:
             contacted_emails.add(email_val)
         if was_replied:
             already_replied.add(email_val)
-        if not was_sent:
-            pending_rows.append((row_idx, email_val, product))
+
+        # Solo calcular pendientes si hoy toca enviar
+        if not hoy_es_dia_envio:
+            continue
+        # No enviar más si ya contestó o completó la secuencia (3 emails)
+        if was_replied or seq >= 3:
+            continue
+        # El siguiente email requiere MIN_DAYS_BETWEEN días desde el último
+        if seq >= 1 and days_since(was_sent) < MIN_DAYS_BETWEEN:
+            continue
+
+        pending_rows.append((row_idx, email_val, seq + 1))
 
     # ── Enviar emails pendientes ──────────────────────────────────────────────
     sent   = 0
     errors = 0
 
-    if pending_rows:
-        log.info(f"{len(pending_rows)} contacto(s) nuevos a enviar.")
+    if pending_rows and hoy_es_dia_envio:
+        log.info(f"{len(pending_rows)} contacto(s) a enviar hoy.")
         if not BREVO_API_KEY and (not SMTP_USER or not SMTP_PASS):
-            err = "No hay BREVO_API_KEY ni credenciales SMTP configuradas. Revisa las variables de entorno."
+            err = "No hay BREVO_API_KEY ni credenciales SMTP configuradas."
             log.error(err)
             send_telegram_text(f"🚨 <b>Agente Email Marketing</b>\n{err}")
             return
         stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-        for row_idx, email_val, product in pending_rows:
-            msg_obj = build_email(email_val, product)
+        for row_idx, email_val, seq_next in pending_rows:
+            msg_obj = build_email(email_val, "", seq_next)
             try:
                 send_email(email_val, msg_obj)
                 sheet.update_cell(row_idx, sent_col, stamp)
+                sheet.update_cell(row_idx, seq_col, seq_next)
                 contacted_emails.add(email_val)
-                log.info(f"  ✓  {email_val}  [{product}]")
+                log.info(f"  ✓  {email_val}  [email #{seq_next}]")
                 sent += 1
             except Exception as exc:
                 log.error(f"  ✗  {email_val}: {exc}")
                 errors += 1
                 send_telegram_text(f"🚨 <b>Agente Email Marketing</b>\nError enviando a {email_val}: {exc}")
+    elif not hoy_es_dia_envio:
+        log.info("No es lunes ni jueves — no se envían emails hoy.")
     else:
-        log.info("Sin contactos nuevos que enviar.")
+        log.info("Sin contactos pendientes que enviar.")
 
     # ── Revisar respuestas por IMAP ───────────────────────────────────────────
     new_replies = check_imap_replies(contacted_emails - already_replied)
@@ -519,7 +622,8 @@ def run_cycle():
     # ── Estadísticas finales ──────────────────────────────────────────────────
     total_replied = len(already_replied)
     pending_final = len([r for r in records
-                         if not str(r.get(COL_SENT, "")).strip()
+                         if int(str(r.get(COL_SEQ, "") or "0")) < 3
+                         and not str(r.get(COL_REPLIED, "")).strip()
                          and str(r.get(COL_EMAIL, "")).strip()])
 
     # Actualizar estado compartido para el chat
