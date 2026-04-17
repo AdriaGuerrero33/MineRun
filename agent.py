@@ -40,6 +40,10 @@ SMTP_PORT        = int(os.getenv("SMTP_PORT", "465"))
 SMTP_USER        = os.getenv("SMTP_USER", "")
 SMTP_PASS        = os.getenv("SMTP_PASS", "")
 FROM_NAME        = os.getenv("FROM_NAME", "Reseñas Plus")
+FROM_EMAIL       = os.getenv("FROM_EMAIL", SMTP_USER)
+
+# ── Config Brevo API (alternativa a SMTP, no bloqueada por Railway) ───────────
+BREVO_API_KEY    = os.getenv("BREVO_API_KEY", "")
 
 IMAP_HOST        = os.getenv("IMAP_HOST", "217.116.0.237")
 IMAP_PORT        = int(os.getenv("IMAP_PORT", "143"))
@@ -226,7 +230,39 @@ def build_email(to_email: str, product: str) -> MIMEMultipart:
     return msg
 
 
-def open_smtp():
+def send_email(to_email: str, msg: MIMEMultipart) -> None:
+    """Envía un email usando Brevo API (HTTPS) o SMTP como fallback."""
+    subject   = msg["Subject"]
+    from_addr = FROM_EMAIL or SMTP_USER
+
+    # Extraer cuerpos del mensaje MIME
+    body_html = body_text = ""
+    for part in msg.walk():
+        ct = part.get_content_type()
+        if ct == "text/html":
+            body_html = part.get_payload(decode=True).decode("utf-8")
+        elif ct == "text/plain":
+            body_text = part.get_payload(decode=True).decode("utf-8")
+
+    if BREVO_API_KEY:
+        payload = {
+            "sender":      {"name": FROM_NAME, "email": from_addr},
+            "to":          [{"email": to_email}],
+            "subject":     subject,
+            "htmlContent": body_html,
+            "textContent": body_text,
+        }
+        resp = requests.post(
+            "https://api.brevo.com/v3/smtp/email",
+            headers={"api-key": BREVO_API_KEY, "Content-Type": "application/json"},
+            json=payload,
+            timeout=30,
+        )
+        if resp.status_code not in (200, 201):
+            raise RuntimeError(f"Brevo API error {resp.status_code}: {resp.text}")
+        return
+
+    # Fallback SMTP
     if SMTP_PORT == 465:
         conn = smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=30)
     elif SMTP_PORT == 587:
@@ -237,7 +273,8 @@ def open_smtp():
         conn = smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30)
         conn.ehlo()
     conn.login(SMTP_USER, SMTP_PASS)
-    return conn
+    conn.sendmail(SMTP_USER, to_email, msg.as_string())
+    conn.quit()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -332,29 +369,24 @@ def run_cycle():
 
     if pending_rows:
         log.info(f"{len(pending_rows)} contacto(s) nuevos a enviar.")
-        if not SMTP_USER or not SMTP_PASS:
-            msg = "SMTP_USER o SMTP_PASS no están configurados. Revisa el fichero .env."
-            log.error(msg)
-            send_telegram_text(f"🚨 <b>Agente Email Marketing</b>\n{msg}")
+        if not BREVO_API_KEY and (not SMTP_USER or not SMTP_PASS):
+            err = "No hay BREVO_API_KEY ni credenciales SMTP configuradas. Revisa las variables de entorno."
+            log.error(err)
+            send_telegram_text(f"🚨 <b>Agente Email Marketing</b>\n{err}")
             return
-        try:
-            smtp  = open_smtp()
-            stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-            with smtp:
-                for row_idx, email_val, product in pending_rows:
-                    msg_obj = build_email(email_val, product)
-                    try:
-                        smtp.sendmail(SMTP_USER, email_val, msg_obj.as_string())
-                        sheet.update_cell(row_idx, sent_col, stamp)
-                        contacted_emails.add(email_val)
-                        log.info(f"  ✓  {email_val}  [{product}]")
-                        sent += 1
-                    except Exception as exc:
-                        log.error(f"  ✗  {email_val}: {exc}")
-                        errors += 1
-        except Exception as exc:
-            log.error(f"SMTP falló: {exc}")
-            send_telegram_text(f"🚨 <b>Agente Email Marketing</b>\nSMTP error: {exc}")
+        stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+        for row_idx, email_val, product in pending_rows:
+            msg_obj = build_email(email_val, product)
+            try:
+                send_email(email_val, msg_obj)
+                sheet.update_cell(row_idx, sent_col, stamp)
+                contacted_emails.add(email_val)
+                log.info(f"  ✓  {email_val}  [{product}]")
+                sent += 1
+            except Exception as exc:
+                log.error(f"  ✗  {email_val}: {exc}")
+                errors += 1
+                send_telegram_text(f"🚨 <b>Agente Email Marketing</b>\nError enviando a {email_val}: {exc}")
     else:
         log.info("Sin contactos nuevos que enviar.")
 
