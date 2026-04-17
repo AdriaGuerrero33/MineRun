@@ -302,7 +302,9 @@ def build_email(to_email: str, product: str) -> MIMEMultipart:
         f"con su reputación online y queremos hacer lo mismo por ti.\n\n"
         f"¿Tienes unos minutos para charlar? Responde a este correo o llámanos "
         f"y lo resolvemos juntos.\n\n"
-        f"Un saludo,\n{FROM_NAME}\n\n"
+        f"Un saludo,\n\n"
+        f"El equipo de {FROM_NAME}\n"
+        f"+34 611 00 50 18 (WhatsApp y llamadas)\n\n"
         f"─────────────────────────────────────────────\n"
         f"Si no deseas recibir más correos, responde con\n"
         f'el asunto "BAJA" y te eliminamos de inmediato.\n'
@@ -316,7 +318,10 @@ def build_email(to_email: str, product: str) -> MIMEMultipart:
         f"a crecer con su reputación online y queremos hacer lo mismo por ti.</p>"
         f"<p>¿Tienes unos minutos para charlar? Responde a este correo o llámanos "
         f"y lo resolvemos juntos.</p>"
-        f"<p>Un saludo,<br/><strong>{FROM_NAME}</strong></p>"
+        f"<p>Un saludo,</p>"
+        f'<p><strong>El equipo de {FROM_NAME}</strong><br/>'
+        f'📞 <a href="https://wa.me/34611005018" style="color:#222;text-decoration:none;">+34 611 00 50 18</a> '
+        f'<span style="color:#888;font-size:13px;">(WhatsApp y llamadas)</span></p>'
         f'<hr style="border:none;border-top:1px solid #eee;margin-top:30px;"/>'
         f'<p style="font-size:11px;color:#aaa;">Si no deseas recibir más correos, '
         f"responde con el asunto <em>BAJA</em> y te eliminamos de inmediato.</p>"
