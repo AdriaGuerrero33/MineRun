@@ -25,6 +25,7 @@ from email.mime.text import MIMEText
 from email.utils import parseaddr
 from pathlib import Path
 
+import re
 import requests
 from dotenv import load_dotenv
 from gtts import gTTS
@@ -68,6 +69,11 @@ CHECK_INTERVAL_H = int(os.getenv("CHECK_INTERVAL_HOURS", "12"))
 MIN_DAYS_BETWEEN = int(os.getenv("MIN_DAYS_BETWEEN_EMAILS", "3"))   # mín. días entre emails
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+
+_EMAIL_RE = re.compile(r'^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$')
+
+def _valid_email(addr: str) -> bool:
+    return bool(_EMAIL_RE.match(addr.strip()))
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 log_file = BASE_DIR / "agent.log"
@@ -172,7 +178,7 @@ def _manual_send(target_email: str | None = None) -> None:
         was_replied = str(row.get(COL_REPLIED, "")).strip()
         seq         = int(str(row.get(COL_SEQ, "") or "0"))
 
-        if not email_val or "@" not in email_val:
+        if not _valid_email(email_val):
             continue
         if target_email and email_val != target_email.lower():
             continue
@@ -705,7 +711,7 @@ def run_cycle():
         was_replied = str(row.get(COL_REPLIED, "")).strip()
         seq         = int(str(row.get(COL_SEQ, "") or "0"))
 
-        if not email_val or "@" not in email_val:
+        if not _valid_email(email_val):
             continue
         if seq >= 1:
             contacted_emails.add(email_val)
