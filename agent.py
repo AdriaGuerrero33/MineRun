@@ -137,14 +137,76 @@ _state: dict = {
 
 _HELP_TEXT = (
     "🤖 <b>Comandos disponibles:</b>\n\n"
-    "/estado   – Ver estadísticas actuales\n"
-    "/proxima  – Cuándo es la próxima revisión\n"
-    "/que      – Qué hace este agente\n"
-    "/ayuda    – Mostrar esta ayuda"
+    "/estado            – Ver estadísticas actuales\n"
+    "/proxima           – Cuándo es la próxima revisión\n"
+    "/que               – Qué hace este agente\n"
+    "/enviar            – Enviar ahora a toda la lista\n"
+    "/enviar email@...  – Enviar ahora a un contacto concreto\n"
+    "/ayuda             – Mostrar esta ayuda"
 )
 
+
+def _manual_send(target_email: str | None = None) -> None:
+    """Envía el siguiente email de la secuencia a un contacto o a toda la lista."""
+    send_telegram_text("⏳ Procesando envío manual...")
+    try:
+        sheet   = get_worksheet()
+        records = sheet.get_all_records()
+        headers = sheet.row_values(1)
+    except Exception as exc:
+        send_telegram_text(f"🚨 Error leyendo el Sheet: {exc}")
+        return
+
+    sent_col  = ensure_column(sheet, headers, COL_SENT)
+    seq_col   = ensure_column(sheet, headers, COL_SEQ)
+    reply_col = ensure_column(sheet, headers, COL_REPLIED)
+
+    stamp   = datetime.now().strftime("%Y-%m-%d %H:%M")
+    sent    = 0
+    errors  = 0
+    skipped = 0
+
+    for row_idx, row in enumerate(records, start=2):
+        email_val   = str(row.get(COL_EMAIL, "")).strip().lower()
+        was_replied = str(row.get(COL_REPLIED, "")).strip()
+        seq         = int(str(row.get(COL_SEQ, "") or "0"))
+
+        if not email_val or "@" not in email_val:
+            continue
+        if target_email and email_val != target_email.lower():
+            continue
+        if was_replied:
+            skipped += 1
+            continue
+
+        seq_next = seq + 1
+        msg_obj  = build_email(email_val, "", seq_next)
+        try:
+            send_email(email_val, msg_obj)
+            sheet.update_cell(row_idx, sent_col, stamp)
+            sheet.update_cell(row_idx, seq_col, seq_next)
+            log.info(f"  [manual] ✓  {email_val}  [email #{seq_next}]")
+            sent += 1
+        except Exception as exc:
+            log.error(f"  [manual] ✗  {email_val}: {exc}")
+            errors += 1
+
+    if target_email and sent == 0 and errors == 0:
+        send_telegram_text(f"⚠️ No encontré el contacto <code>{target_email}</code> en el Sheet o ya respondió.")
+        return
+
+    resumen = (
+        f"✅ <b>Envío manual completado</b>\n\n"
+        f"✉️ Enviados: <b>{sent}</b>\n"
+        f"❌ Errores: <b>{errors}</b>\n"
+        + (f"⏭ Omitidos (ya respondieron): <b>{skipped}</b>" if skipped else "")
+    )
+    send_telegram_text(resumen)
+
+
 def _handle_message(text: str) -> None:
-    cmd = text.strip().lower().split()[0] if text.strip() else ""
+    parts = text.strip().split()
+    cmd   = parts[0].lower() if parts else ""
 
     if cmd in ("/estado", "/status"):
         s = _state
@@ -161,6 +223,7 @@ def _handle_message(text: str) -> None:
             f"⏳ Pendientes: <b>{s['pending']}</b>\n"
             f"💬 Han respondido: <b>{s['total_replied']}</b>"
         )
+        send_telegram_text(reply)
 
     elif cmd in ("/proxima", "/siguiente"):
         nr = _state["next_run"]
@@ -170,27 +233,31 @@ def _handle_message(text: str) -> None:
             reply = f"🔜 Próxima revisión: <b>{nr.strftime('%d/%m/%Y %H:%M')}</b>\n(en {h}h {m}min)"
         else:
             reply = "⏳ El agente aún no ha terminado su primer ciclo."
+        send_telegram_text(reply)
 
     elif cmd in ("/que", "/info"):
-        reply = (
+        send_telegram_text(
             "🤖 <b>¿Qué hago?</b>\n\n"
-            "Soy un agente de email marketing automático. Cada semana:\n\n"
-            "1️⃣ Leo tu Google Sheet y envío emails de seguimiento a contactos nuevos\n"
+            "Soy un agente de email marketing automático. Los lunes y jueves:\n\n"
+            "1️⃣ Leo tu Google Sheet y envío el siguiente email de la secuencia a cada contacto\n"
             "2️⃣ Reviso tu bandeja de entrada para detectar quién ha respondido\n"
-            "3️⃣ Te mando este reporte con las estadísticas\n\n"
+            "3️⃣ Te mando un reporte con las estadísticas\n\n"
+            "Tengo 6 templates distintos que van rotando. Solo paro si el contacto responde o pide BAJA.\n\n"
             f"⏱ Reviso cada <b>{CHECK_INTERVAL_H} horas</b>"
         )
 
+    elif cmd == "/enviar":
+        # /enviar → toda la lista | /enviar email@... → contacto concreto
+        target = parts[1] if len(parts) > 1 else None
+        threading.Thread(
+            target=_manual_send, args=(target,), daemon=True, name="manual-send"
+        ).start()
+
     elif cmd in ("/ayuda", "/help", "/start"):
-        reply = _HELP_TEXT
+        send_telegram_text(_HELP_TEXT)
 
     else:
-        reply = (
-            "👋 Hola. Puedo informarte sobre mi actividad.\n\n"
-            + _HELP_TEXT
-        )
-
-    send_telegram_text(reply)
+        send_telegram_text("👋 Hola. Puedo informarte sobre mi actividad.\n\n" + _HELP_TEXT)
 
 
 def _polling_loop() -> None:
