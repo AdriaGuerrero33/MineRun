@@ -315,9 +315,11 @@ def days_since(date_str: str) -> int:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def build_email(to_email: str, product: str, seq: int = 1) -> MIMEMultipart:
-    # ── Selección de template según nº de email en la secuencia ─────────────
-    if seq == 1:
-        # Email 1 — Re-engagement: ¿siguen interesados?
+    # Cicla entre 6 templates indefinidamente
+    template = ((seq - 1) % 6) + 1
+
+    if template == 1:
+        # Re-engagement: ¿siguen interesados?
         subject = "¿Al final lo descartasteis o seguís interesados?"
         body_text = (
             "Hola,\n\n"
@@ -328,7 +330,6 @@ def build_email(to_email: str, product: str, seq: int = 1) -> MIMEMultipart:
             "Y si seguís pensando en ello, podemos hablar cinco minutos "
             "y os cuento exactamente cómo funciona y qué resultados están consiguiendo "
             "otros negocios como el vuestro.\n\n"
-            "Sin compromisos. Solo una conversación.\n\n"
             "¿Seguís interesados?\n\n"
         )
         body_html = (
@@ -340,21 +341,17 @@ def build_email(to_email: str, product: str, seq: int = 1) -> MIMEMultipart:
             "<p>Y si seguís pensando en ello, podemos hablar cinco minutos "
             "y os cuento exactamente cómo funciona y qué resultados están consiguiendo "
             "otros negocios como el vuestro.</p>"
-            "<p>Sin compromisos. Solo una conversación.</p>"
             '<p style="font-weight:bold;">¿Seguís interesados?</p>'
         )
 
-    elif seq == 2:
-        # Email 2 — Prueba social: resultados reales de otros clientes
+    elif template == 2:
+        # Prueba social: resultados reales
         subject = "Lo que están consiguiendo otros negocios como el vuestro"
         body_text = (
             "Hola,\n\n"
-            "La semana pasada os escribí y no tuve respuesta.\n\n"
-            "Normal. Hay mil cosas.\n\n"
-            "Pero quería contaros algo antes de dejarlo.\n\n"
+            "Una cosa rápida.\n\n"
             "Un restaurante con el que trabajamos pasó de 38 a 140 reseñas en Google en 45 días.\n\n"
-            "Una clínica dental empezó a aparecer en el top 3 de Google Maps "
-            "en su zona. Antes ni salía.\n\n"
+            "Una clínica dental empezó a aparecer en el top 3 de Google Maps en su zona. Antes ni salía.\n\n"
             "No es magia. Es un sistema que funciona porque los clientes "
             "que ya están contentos simplemente no saben que pueden ayudaros con una reseña.\n\n"
             "Nosotros les recordamos por vosotros.\n\n"
@@ -362,9 +359,7 @@ def build_email(to_email: str, product: str, seq: int = 1) -> MIMEMultipart:
         )
         body_html = (
             "<p>Hola,</p>"
-            "<p>La semana pasada os escribí y no tuve respuesta.</p>"
-            "<p>Normal. Hay mil cosas.</p>"
-            "<p>Pero quería contaros algo antes de dejarlo.</p>"
+            "<p>Una cosa rápida.</p>"
             "<p>Un restaurante con el que trabajamos pasó de <strong>38 a 140 reseñas</strong> "
             "en Google en 45 días.</p>"
             "<p>Una clínica dental empezó a aparecer en el <strong>top 3 de Google Maps</strong> "
@@ -375,26 +370,105 @@ def build_email(to_email: str, product: str, seq: int = 1) -> MIMEMultipart:
             '<p style="font-weight:bold;">¿Tiene sentido hablar diez minutos para ver si os encaja?</p>'
         )
 
-    else:
-        # Email 3 — Breakup email: último mensaje
-        subject = "Último mensaje"
+    elif template == 3:
+        # Pregunta sobre su situación actual (Voss: pregunta calibrada)
+        subject = "Una pregunta sobre vuestras reseñas"
         body_text = (
             "Hola,\n\n"
-            "Os he escrito un par de veces y no hemos conseguido conectar.\n\n"
-            "Lo entiendo. No siempre es el momento.\n\n"
-            "Este es mi último mensaje.\n\n"
-            "Si algún día las reseñas en Google se convierten en una prioridad, "
-            "aquí estaremos. Solo tenéis que escribirnos.\n\n"
-            "Suerte con todo.\n\n"
+            "Curiosidad genuina.\n\n"
+            "¿Cuántas reseñas en Google tenéis ahora mismo?\n\n"
+            "Lo pregunto porque hay un umbral a partir del cual Google empieza "
+            "a mostraros de forma consistente cuando alguien busca en vuestra zona.\n\n"
+            "La mayoría de negocios están por debajo sin saberlo.\n\n"
+            "Si me lo decís, os digo en dos minutos si estáis bien o si hay margen de mejora.\n\n"
+            "Sin compromiso ninguno.\n\n"
         )
         body_html = (
             "<p>Hola,</p>"
-            "<p>Os he escrito un par de veces y no hemos conseguido conectar.</p>"
-            "<p>Lo entiendo. No siempre es el momento.</p>"
-            "<p>Este es mi último mensaje.</p>"
-            "<p>Si algún día las reseñas en Google se convierten en una prioridad, "
-            "aquí estaremos. Solo tenéis que escribirnos.</p>"
-            "<p>Suerte con todo.</p>"
+            "<p>Curiosidad genuina.</p>"
+            "<p>¿Cuántas reseñas en Google tenéis ahora mismo?</p>"
+            "<p>Lo pregunto porque hay un umbral a partir del cual Google empieza "
+            "a mostraros de forma consistente cuando alguien busca en vuestra zona.</p>"
+            "<p>La mayoría de negocios están por debajo sin saberlo.</p>"
+            "<p>Si me lo decís, os digo en dos minutos si estáis bien o si hay margen de mejora.</p>"
+            "<p>Sin compromiso ninguno.</p>"
+        )
+
+    elif template == 4:
+        # El coste de no actuar (Hormozi: value equation)
+        subject = "¿Sabéis cuánto os cuesta no tener reseñas?"
+        body_text = (
+            "Hola,\n\n"
+            "Un dato que suele sorprender a la gente.\n\n"
+            "El 93% de los consumidores leen reseñas antes de elegir un negocio local.\n\n"
+            "Y el 68% forma su opinión después de leer entre 1 y 6 reseñas.\n\n"
+            "Lo que significa que si vuestra competencia tiene más reseñas que vosotros, "
+            "os están quitando clientes cada día sin que os enteréis.\n\n"
+            "No os lo cuento para asustaros. Os lo cuento porque tiene solución "
+            "y es más sencilla de lo que parece.\n\n"
+            "¿Hablamos?\n\n"
+        )
+        body_html = (
+            "<p>Hola,</p>"
+            "<p>Un dato que suele sorprender a la gente.</p>"
+            "<p>El <strong>93% de los consumidores</strong> leen reseñas antes de elegir un negocio local.</p>"
+            "<p>Y el <strong>68%</strong> forma su opinión después de leer entre 1 y 6 reseñas.</p>"
+            "<p>Lo que significa que si vuestra competencia tiene más reseñas que vosotros, "
+            "os están quitando clientes cada día sin que os enteréis.</p>"
+            "<p>No os lo cuento para asustaros. Os lo cuento porque tiene solución "
+            "y es más sencilla de lo que parece.</p>"
+            '<p style="font-weight:bold;">¿Hablamos?</p>'
+        )
+
+    elif template == 5:
+        # Historia / storytelling (Luis Monge Malo style)
+        subject = "Lo que me dijo un cliente la semana pasada"
+        body_text = (
+            "Hola,\n\n"
+            "La semana pasada un cliente nos llamó para contarnos algo.\n\n"
+            "Nos dijo que desde que empezó a tener más reseñas en Google, "
+            "la gente llega a su negocio ya convencida.\n\n"
+            "Textualmente: \"Ya no tengo que venderme tanto. Llegan y me dicen "
+            "que han leído las reseñas y que quieren trabajar conmigo.\"\n\n"
+            "Eso es lo que hacen las reseñas. No son solo estrellas en Google. "
+            "Son ventas que pasan sin que tengas que hacer nada.\n\n"
+            "¿Os gustaría que os pasara lo mismo?\n\n"
+        )
+        body_html = (
+            "<p>Hola,</p>"
+            "<p>La semana pasada un cliente nos llamó para contarnos algo.</p>"
+            "<p>Nos dijo que desde que empezó a tener más reseñas en Google, "
+            "la gente llega a su negocio ya convencida.</p>"
+            "<p>Textualmente: <em>\"Ya no tengo que venderme tanto. Llegan y me dicen "
+            "que han leído las reseñas y que quieren trabajar conmigo.\"</em></p>"
+            "<p>Eso es lo que hacen las reseñas. No son solo estrellas en Google. "
+            "Son ventas que pasan sin que tengas que hacer nada.</p>"
+            '<p style="font-weight:bold;">¿Os gustaría que os pasara lo mismo?</p>'
+        )
+
+    else:
+        # template == 6: Soft re-engagement (Isra Bravo: directo y sin drama)
+        subject = "¿Seguimos en contacto o lo dejamos?"
+        body_text = (
+            "Hola,\n\n"
+            "Llevo un tiempo escribiéndoos sobre las reseñas en Google.\n\n"
+            "No quiero ser pesado.\n\n"
+            "Así que os pregunto directamente: ¿tiene sentido que sigamos en contacto "
+            "o preferís que no os escriba más?\n\n"
+            "Las dos opciones están bien.\n\n"
+            "Si queréis que os deje en paz, responded con BAJA y listo, sin dramas.\n\n"
+            "Y si en algún momento queréis retomar la conversación, "
+            "aquí estaremos.\n\n"
+        )
+        body_html = (
+            "<p>Hola,</p>"
+            "<p>Llevo un tiempo escribiéndoos sobre las reseñas en Google.</p>"
+            "<p>No quiero ser pesado.</p>"
+            "<p>Así que os pregunto directamente: ¿tiene sentido que sigamos en contacto "
+            "o preferís que no os escriba más?</p>"
+            "<p>Las dos opciones están bien.</p>"
+            "<p>Si queréis que os deje en paz, responded con <strong>BAJA</strong> y listo, sin dramas.</p>"
+            "<p>Y si en algún momento queréis retomar la conversación, aquí estaremos.</p>"
         )
 
     # ── Firma común ───────────────────────────────────────────────────────────
@@ -569,8 +643,8 @@ def run_cycle():
         # Solo calcular pendientes si hoy toca enviar
         if not hoy_es_dia_envio:
             continue
-        # No enviar más si ya contestó o completó la secuencia (3 emails)
-        if was_replied or seq >= 3:
+        # No enviar más si ya contestó o se dio de baja
+        if was_replied:
             continue
         # El siguiente email requiere MIN_DAYS_BETWEEN días desde el último
         if seq >= 1 and days_since(was_sent) < MIN_DAYS_BETWEEN:
@@ -622,8 +696,7 @@ def run_cycle():
     # ── Estadísticas finales ──────────────────────────────────────────────────
     total_replied = len(already_replied)
     pending_final = len([r for r in records
-                         if int(str(r.get(COL_SEQ, "") or "0")) < 3
-                         and not str(r.get(COL_REPLIED, "")).strip()
+                         if not str(r.get(COL_REPLIED, "")).strip()
                          and str(r.get(COL_EMAIL, "")).strip()])
 
     # Actualizar estado compartido para el chat
