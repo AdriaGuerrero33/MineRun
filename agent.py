@@ -148,8 +148,35 @@ _HELP_TEXT = (
     "/que               – Qué hace este agente\n"
     "/enviar            – Enviar ahora a toda la lista\n"
     "/enviar email@...  – Enviar ahora a un contacto concreto\n"
+    "/reiniciar         – Resetear secuencia de todos los contactos\n"
     "/ayuda             – Mostrar esta ayuda"
 )
+
+
+def _reset_sequences() -> None:
+    """Borra Enviado y Secuencia de todos los contactos para empezar desde email #1."""
+    send_telegram_text("⏳ Reiniciando secuencias...")
+    try:
+        sheet   = get_worksheet()
+        records = sheet.get_all_records()
+        headers = sheet.row_values(1)
+    except Exception as exc:
+        send_telegram_text(f"🚨 Error leyendo el Sheet: {exc}")
+        return
+
+    sent_col = ensure_column(sheet, headers, COL_SENT)
+    seq_col  = ensure_column(sheet, headers, COL_SEQ)
+
+    reset = 0
+    for row_idx, row in enumerate(records, start=2):
+        email_val = str(row.get(COL_EMAIL, "")).strip().lower()
+        if not email_val or "@" not in email_val:
+            continue
+        sheet.update_cell(row_idx, sent_col, "")
+        sheet.update_cell(row_idx, seq_col, "")
+        reset += 1
+
+    send_telegram_text(f"✅ <b>Reinicio completado</b>\n\n{reset} contactos reseteados al email #1.")
 
 
 def _manual_send(target_email: str | None = None) -> None:
@@ -178,7 +205,7 @@ def _manual_send(target_email: str | None = None) -> None:
         was_replied = str(row.get(COL_REPLIED, "")).strip()
         seq         = int(str(row.get(COL_SEQ, "") or "0"))
 
-        if not _valid_email(email_val):
+        if not email_val or "@" not in email_val:
             continue
         if target_email and email_val != target_email.lower():
             continue
@@ -256,6 +283,11 @@ def _handle_message(text: str) -> None:
             "Tengo 6 templates distintos que van rotando. Solo paro si el contacto responde o pide BAJA.\n\n"
             f"⏱ Reviso cada <b>{CHECK_INTERVAL_H} horas</b>"
         )
+
+    elif cmd == "/reiniciar":
+        threading.Thread(
+            target=_reset_sequences, daemon=True, name="reset"
+        ).start()
 
     elif cmd == "/enviar":
         # /enviar → toda la lista | /enviar email@... → contacto concreto
@@ -711,7 +743,7 @@ def run_cycle():
         was_replied = str(row.get(COL_REPLIED, "")).strip()
         seq         = int(str(row.get(COL_SEQ, "") or "0"))
 
-        if not _valid_email(email_val):
+        if not email_val or "@" not in email_val:
             continue
         if seq >= 1:
             contacted_emails.add(email_val)
