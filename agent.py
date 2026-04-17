@@ -18,6 +18,7 @@ import os
 import smtplib
 import ssl
 import time
+import threading
 from datetime import datetime, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -114,6 +115,106 @@ def send_telegram_voice(text_es: str) -> None:
     except Exception as exc:
         log.warning(f"No se pudo generar/enviar el audio: {exc}")
         send_telegram_text("⚠️ No se pudo generar la nota de voz. Revisa el log.")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Chat bidireccional con Telegram
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Estado compartido entre el ciclo principal y el hilo de chat
+_state: dict = {
+    "next_run":      None,
+    "last_run":      None,
+    "last_sent":     0,
+    "last_errors":   0,
+    "total":         0,
+    "contacted":     0,
+    "pending":       0,
+    "total_replied": 0,
+}
+
+_HELP_TEXT = (
+    "🤖 <b>Comandos disponibles:</b>\n\n"
+    "/estado   – Ver estadísticas actuales\n"
+    "/proxima  – Cuándo es la próxima revisión\n"
+    "/que      – Qué hace este agente\n"
+    "/ayuda    – Mostrar esta ayuda"
+)
+
+def _handle_message(text: str) -> None:
+    cmd = text.strip().lower().split()[0] if text.strip() else ""
+
+    if cmd in ("/estado", "/status"):
+        s = _state
+        lr = s["last_run"].strftime("%d/%m/%Y %H:%M") if s["last_run"] else "Aún no ha corrido"
+        nr = s["next_run"].strftime("%d/%m/%Y %H:%M") if s["next_run"] else "Pendiente"
+        reply = (
+            "📊 <b>Estado actual del agente</b>\n\n"
+            f"🕐 Última revisión: <b>{lr}</b>\n"
+            f"🔜 Próxima revisión: <b>{nr}</b>\n\n"
+            f"✉️ Emails enviados (último ciclo): <b>{s['last_sent']}</b>\n"
+            f"❌ Errores (último ciclo): <b>{s['last_errors']}</b>\n\n"
+            f"👥 Total contactos: <b>{s['total']}</b>\n"
+            f"✅ Ya contactados: <b>{s['contacted']}</b>\n"
+            f"⏳ Pendientes: <b>{s['pending']}</b>\n"
+            f"💬 Han respondido: <b>{s['total_replied']}</b>"
+        )
+
+    elif cmd in ("/proxima", "/siguiente"):
+        nr = _state["next_run"]
+        if nr:
+            diff = nr - datetime.now()
+            h, m = divmod(int(diff.total_seconds() / 60), 60)
+            reply = f"🔜 Próxima revisión: <b>{nr.strftime('%d/%m/%Y %H:%M')}</b>\n(en {h}h {m}min)"
+        else:
+            reply = "⏳ El agente aún no ha terminado su primer ciclo."
+
+    elif cmd in ("/que", "/info"):
+        reply = (
+            "🤖 <b>¿Qué hago?</b>\n\n"
+            "Soy un agente de email marketing automático. Cada semana:\n\n"
+            "1️⃣ Leo tu Google Sheet y envío emails de seguimiento a contactos nuevos\n"
+            "2️⃣ Reviso tu bandeja de entrada para detectar quién ha respondido\n"
+            "3️⃣ Te mando este reporte con las estadísticas\n\n"
+            f"⏱ Reviso cada <b>{CHECK_INTERVAL_H} horas</b>"
+        )
+
+    elif cmd in ("/ayuda", "/help", "/start"):
+        reply = _HELP_TEXT
+
+    else:
+        reply = (
+            "👋 Hola. Puedo informarte sobre mi actividad.\n\n"
+            + _HELP_TEXT
+        )
+
+    send_telegram_text(reply)
+
+
+def _polling_loop() -> None:
+    """Hilo en segundo plano que escucha mensajes entrantes de Telegram."""
+    offset = 0
+    while True:
+        try:
+            resp = requests.post(
+                f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates",
+                json={"offset": offset, "timeout": 30, "allowed_updates": ["message"]},
+                timeout=40,
+            )
+            data = resp.json()
+            for update in data.get("result", []):
+                offset = update["update_id"] + 1
+                msg = update.get("message", {})
+                chat_id = str(msg.get("chat", {}).get("id", ""))
+                if chat_id != str(TELEGRAM_CHAT_ID):
+                    continue
+                text = msg.get("text", "")
+                if text:
+                    log.info(f"Mensaje Telegram recibido: {text!r}")
+                    _handle_message(text)
+        except Exception as exc:
+            log.warning(f"Telegram polling error: {exc}")
+            time.sleep(5)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -407,6 +508,15 @@ def run_cycle():
                          if not str(r.get(COL_SENT, "")).strip()
                          and str(r.get(COL_EMAIL, "")).strip()])
 
+    # Actualizar estado compartido para el chat
+    _state["last_run"]      = datetime.now()
+    _state["last_sent"]     = sent
+    _state["last_errors"]   = errors
+    _state["total"]         = total
+    _state["contacted"]     = len(contacted_emails)
+    _state["pending"]       = pending_final
+    _state["total_replied"] = total_replied
+
     log.info(f"Ciclo terminado — Enviados: {sent} | Respuestas nuevas: {len(new_replies)} | "
              f"Total respondido: {total_replied}")
 
@@ -447,10 +557,17 @@ def main():
     log.info(f"  Telegram: {'configurado ✓' if TELEGRAM_TOKEN else 'no configurado'}")
     log.info("═══════════════════════════════════════════════════")
 
+    # Arrancar hilo de escucha de mensajes Telegram
+    if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
+        t = threading.Thread(target=_polling_loop, daemon=True, name="tg-poll")
+        t.start()
+        log.info("Hilo de chat Telegram arrancado.")
+
     send_telegram_text(
         "🚀 <b>Agente de Email Marketing arrancado</b>\n"
         f"Revisaré el Sheet cada <b>{CHECK_INTERVAL_H}h</b>, "
-        f"detectaré respuestas automáticamente y te enviaré un reporte de texto y audio."
+        f"detectaré respuestas automáticamente y te enviaré un reporte de texto y audio.\n\n"
+        "💬 Ya puedes escribirme. Prueba con /ayuda"
     )
 
     while True:
@@ -461,6 +578,7 @@ def main():
             send_telegram_text(f"🚨 <b>Error inesperado en el agente</b>\n<code>{exc}</code>")
 
         next_run = datetime.now() + timedelta(hours=CHECK_INTERVAL_H)
+        _state["next_run"] = next_run
         log.info(f"Próxima revisión: {next_run.strftime('%Y-%m-%d %H:%M')}")
         time.sleep(CHECK_INTERVAL_H * 3600)
 
