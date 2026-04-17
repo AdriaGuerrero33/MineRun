@@ -293,38 +293,53 @@ def ensure_column(sheet: gspread.Worksheet, headers: list, name: str) -> int:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def build_email(to_email: str, product: str) -> MIMEMultipart:
-    subject   = f"¿Sigues interesado/a en {product}?"
+    # Asunto estilo Isra Bravo / Luis Monge Malo: corto, humano, genera curiosidad
+    subject = f"¿Qué pasó con {product}?"
+
+    # Cuerpo texto plano
     body_text = (
         f"Hola,\n\n"
-        f"Hace un tiempo mostraste interés en {product} y nos gustaría saber "
-        f"si podemos ayudarte a dar el siguiente paso.\n\n"
-        f"En {FROM_NAME} llevamos años ayudando a nuestros clientes a crecer "
-        f"con su reputación online y queremos hacer lo mismo por ti.\n\n"
-        f"¿Tienes unos minutos para charlar? Responde a este correo o llámanos "
-        f"y lo resolvemos juntos.\n\n"
+        f"Hace un tiempo te interesaste por {product}.\n\n"
+        f"Y luego... nada.\n\n"
+        f"Pasa mucho. La vida se complica, las prioridades cambian "
+        f"y estas cosas se quedan en el cajón.\n\n"
+        f"Pero aquí está la pregunta que me hago:\n\n"
+        f"¿Qué tendría que pasar para que esto dejara de estar pendiente?\n\n"
+        f"No te pido que compres nada. Solo que me respondas eso.\n\n"
+        f"Porque si hay algo que te frenó —el precio, las dudas, el momento— "
+        f"podemos hablarlo.\n\n"
+        f"Y si ya no te interesa, dímelo también. Sin drama.\n\n"
         f"Un saludo,\n\n"
         f"El equipo de {FROM_NAME}\n"
         f"+34 611 00 50 18 (WhatsApp y llamadas)\n\n"
         f"─────────────────────────────────────────────\n"
-        f"Si no deseas recibir más correos, responde con\n"
-        f'el asunto "BAJA" y te eliminamos de inmediato.\n'
+        f"Si no quieres saber más de nosotros, responde con el asunto \"BAJA\".\n"
     )
+
+    # Cuerpo HTML — mismo tono, párrafos cortos
     body_html = (
-        f'<html><body style="font-family:Arial,sans-serif;font-size:15px;color:#222;max-width:600px;">'
+        f'<html><body style="font-family:Georgia,serif;font-size:16px;color:#222;'
+        f'max-width:580px;margin:0 auto;line-height:1.7;">'
         f"<p>Hola,</p>"
-        f"<p>Hace un tiempo mostraste interés en <strong>{product}</strong> y nos "
-        f"gustaría saber si podemos ayudarte a dar el siguiente paso.</p>"
-        f"<p>En <strong>{FROM_NAME}</strong> llevamos años ayudando a nuestros clientes "
-        f"a crecer con su reputación online y queremos hacer lo mismo por ti.</p>"
-        f"<p>¿Tienes unos minutos para charlar? Responde a este correo o llámanos "
-        f"y lo resolvemos juntos.</p>"
+        f"<p>Hace un tiempo te interesaste por <strong>{product}</strong>.</p>"
+        f"<p>Y luego... nada.</p>"
+        f"<p>Pasa mucho. La vida se complica, las prioridades cambian "
+        f"y estas cosas se quedan en el cajón.</p>"
+        f"<p>Pero aquí está la pregunta que me hago:</p>"
+        f'<p style="font-style:italic;border-left:3px solid #ccc;padding-left:12px;">'
+        f"¿Qué tendría que pasar para que esto dejara de estar pendiente?</p>"
+        f"<p>No te pido que compres nada. Solo que me respondas eso.</p>"
+        f"<p>Porque si hay algo que te frenó —el precio, las dudas, el momento— "
+        f"podemos hablarlo.</p>"
+        f"<p>Y si ya no te interesa, dímelo también. Sin drama.</p>"
         f"<p>Un saludo,</p>"
         f'<p><strong>El equipo de {FROM_NAME}</strong><br/>'
-        f'📞 <a href="https://wa.me/34611005018" style="color:#222;text-decoration:none;">+34 611 00 50 18</a> '
-        f'<span style="color:#888;font-size:13px;">(WhatsApp y llamadas)</span></p>'
-        f'<hr style="border:none;border-top:1px solid #eee;margin-top:30px;"/>'
-        f'<p style="font-size:11px;color:#aaa;">Si no deseas recibir más correos, '
-        f"responde con el asunto <em>BAJA</em> y te eliminamos de inmediato.</p>"
+        f'<a href="https://wa.me/34611005018" style="color:#222;text-decoration:none;">'
+        f"+34 611 00 50 18</a> "
+        f'<span style="color:#999;font-size:13px;">(WhatsApp y llamadas)</span></p>'
+        f'<hr style="border:none;border-top:1px solid #eee;margin-top:40px;"/>'
+        f'<p style="font-size:11px;color:#bbb;">Si no quieres saber más de nosotros, '
+        f"responde con el asunto <em>BAJA</em>.</p>"
         f"</body></html>"
     )
     msg            = MIMEMultipart("alternative")
