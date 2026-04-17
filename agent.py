@@ -293,22 +293,19 @@ def ensure_column(sheet: gspread.Worksheet, headers: list, name: str) -> int:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def build_email(to_email: str, product: str) -> MIMEMultipart:
-    # Asunto estilo Isra Bravo / Luis Monge Malo: corto, humano, genera curiosidad
-    subject = f"¿Qué pasó con {product}?"
+    subject = "¿Al final lo descartasteis o seguís interesados?"
 
-    # Cuerpo texto plano
     body_text = (
         f"Hola,\n\n"
-        f"Hace un tiempo te interesaste por {product}.\n\n"
+        f"Hace un tiempo estuvisteis mirando lo de conseguir más reseñas en Google.\n\n"
         f"Y luego... nada.\n\n"
-        f"Pasa mucho. La vida se complica, las prioridades cambian "
-        f"y estas cosas se quedan en el cajón.\n\n"
-        f"Pero aquí está la pregunta que me hago:\n\n"
-        f"¿Qué tendría que pasar para que esto dejara de estar pendiente?\n\n"
-        f"No te pido que compres nada. Solo que me respondas eso.\n\n"
-        f"Porque si hay algo que te frenó —el precio, las dudas, el momento— "
-        f"podemos hablarlo.\n\n"
-        f"Y si ya no te interesa, dímelo también. Sin drama.\n\n"
+        f"No sé si al final lo descartasteis o simplemente se quedó pendiente.\n\n"
+        f"Si ya no es algo que os interese, sin problema, me lo decís y no os molesto más.\n\n"
+        f"Y si seguís pensando en ello, podemos hablar cinco minutos "
+        f"y os cuento exactamente cómo funciona y qué resultados están consiguiendo "
+        f"otros negocios como el vuestro.\n\n"
+        f"Sin compromisos. Solo una conversación.\n\n"
+        f"¿Seguís interesados?\n\n"
         f"Un saludo,\n\n"
         f"El equipo de {FROM_NAME}\n"
         f"+34 611 00 50 18 (WhatsApp y llamadas)\n\n"
@@ -316,22 +313,19 @@ def build_email(to_email: str, product: str) -> MIMEMultipart:
         f"Si no quieres saber más de nosotros, responde con el asunto \"BAJA\".\n"
     )
 
-    # Cuerpo HTML — mismo tono, párrafos cortos
     body_html = (
         f'<html><body style="font-family:Georgia,serif;font-size:16px;color:#222;'
         f'max-width:580px;margin:0 auto;line-height:1.7;">'
         f"<p>Hola,</p>"
-        f"<p>Hace un tiempo te interesaste por <strong>{product}</strong>.</p>"
+        f"<p>Hace un tiempo estuvisteis mirando lo de conseguir más reseñas en Google.</p>"
         f"<p>Y luego... nada.</p>"
-        f"<p>Pasa mucho. La vida se complica, las prioridades cambian "
-        f"y estas cosas se quedan en el cajón.</p>"
-        f"<p>Pero aquí está la pregunta que me hago:</p>"
-        f'<p style="font-style:italic;border-left:3px solid #ccc;padding-left:12px;">'
-        f"¿Qué tendría que pasar para que esto dejara de estar pendiente?</p>"
-        f"<p>No te pido que compres nada. Solo que me respondas eso.</p>"
-        f"<p>Porque si hay algo que te frenó —el precio, las dudas, el momento— "
-        f"podemos hablarlo.</p>"
-        f"<p>Y si ya no te interesa, dímelo también. Sin drama.</p>"
+        f"<p>No sé si al final lo descartasteis o simplemente se quedó pendiente.</p>"
+        f"<p>Si ya no es algo que os interese, sin problema, me lo decís y no os molesto más.</p>"
+        f"<p>Y si seguís pensando en ello, podemos hablar cinco minutos "
+        f"y os cuento exactamente cómo funciona y qué resultados están consiguiendo "
+        f"otros negocios como el vuestro.</p>"
+        f"<p>Sin compromisos. Solo una conversación.</p>"
+        f'<p style="font-weight:bold;">¿Seguís interesados?</p>'
         f"<p>Un saludo,</p>"
         f'<p><strong>El equipo de {FROM_NAME}</strong><br/>'
         f'<a href="https://wa.me/34611005018" style="color:#222;text-decoration:none;">'
