@@ -426,50 +426,67 @@ def _ai_reply(text: str) -> None:
         proximo = _next_send_day()
 
         templates_info = (
-            "Los 6 templates de email que rotan (cada contacto recibe uno distinto en cada envío):\n"
-            "  1. '¿Al final lo descartasteis o seguís interesados?' (re-engagement directo)\n"
-            "  2. 'Lo que están consiguiendo otros negocios como el vuestro' (prueba social con casos)\n"
-            "  3. 'Una pregunta sobre vuestras reseñas' (pregunta calibrada estilo Chris Voss)\n"
-            "  4. '¿Sabéis cuánto os cuesta no tener reseñas?' (coste de inacción con datos)\n"
-            "  5. 'Lo que me dijo un cliente la semana pasada' (storytelling)\n"
-            "  6. '¿Seguimos en contacto o lo dejamos?' (soft re-engagement con opción BAJA)"
+            "TEMPLATES DE EMAIL (rotan en este orden para cada contacto):\n"
+            "  1. Asunto: '¿Al final lo descartasteis o seguís interesados?' — re-engagement, pregunta directa si siguen interesados\n"
+            "  2. Asunto: 'Lo que están consiguiendo otros negocios como el vuestro' — prueba social, caso restaurante 38→140 reseñas, clínica dental top 3\n"
+            "  3. Asunto: 'Una pregunta sobre vuestras reseñas' — pregunta calibrada (Voss): cuántas reseñas tienen ahora y si están por encima del umbral\n"
+            "  4. Asunto: '¿Sabéis cuánto os cuesta no tener reseñas?' — coste de inacción, datos 93% consumidores leen reseñas, 68% decide con 1-6\n"
+            "  5. Asunto: 'Lo que me dijo un cliente la semana pasada' — storytelling: cliente dice 'ya no tengo que venderme tanto'\n"
+            "  6. Asunto: '¿Seguimos en contacto o lo dejamos?' — soft re-engagement, opción explícita de BAJA o seguir"
         )
+
+        # Leer inbox si el usuario pregunta por correos/respuestas
+        inbox_context = ""
+        t_lower = text.lower()
+        if any(k in t_lower for k in ["mail", "correo", "email", "respuest", "respondi", "bandeja", "inbox",
+                                       "contest", "buzón", "buzon", "leído", "leido", "recib", "escribi"]):
+            mails = _fetch_recent_mails(15)
+            if mails:
+                inbox_context = "\n\nBANDEJA DE ENTRADA REAL (últimos 14 días, leída ahora mismo via IMAP):\n"
+                for m in mails:
+                    inbox_context += f"• [{m['date']}] De: {m['from']} | Asunto: {m['subject']}\n  {m['body'][:300]}\n"
+            else:
+                inbox_context = "\n\n(Bandeja vacía o no accesible ahora mismo.)"
 
         context = (
-            "Eres el asistente personal de ADRIÁ, dueño de Reseñas Plus (servicio de reseñas en Google para negocios locales en España). "
-            "Estás hablando con ÉL por Telegram, no con un cliente. Él gestiona una campaña de email marketing automática que tú mismo controlas.\n\n"
-            f"INFO DE LA CAMPAÑA:\n"
-            f"- Hoy es {now.strftime('%A %d/%m/%Y %H:%M')} (zona horaria Madrid).\n"
-            f"- Los envíos se hacen SOLO los LUNES y JUEVES.\n"
-            f"- Próximo envío programado: {proximo}.\n"
-            f"- Entre emails pasan mínimo {MIN_DAYS_BETWEEN} días.\n"
-            f"- Total contactos: {s['total']} | Ya contactados: {s['contacted']} | Pendientes: {s['pending']}\n"
-            f"- Han respondido en total: {s['total_replied']} | HOT leads detectados: {s.get('hot_leads', 0)}\n"
-            f"- Último ciclo: {s['last_sent']} enviados, {s['last_errors']} errores, {s.get('last_replies', 0)} respuestas nuevas.\n"
-            f"- Pausado: {'SÍ' if _PAUSED else 'NO'}.\n\n"
-            f"{templates_info}\n\n"
-            "COMPORTAMIENTO:\n"
-            "- Responde SIEMPRE en español natural, conversacional, directo. Como un colega, no como un formulario.\n"
-            "- NUNCA saludes con '¡Hola! ¿En qué puedo ayudarte?' — ve al grano.\n"
-            "- Si pregunta datos, dale los números reales de arriba.\n"
-            "- Si pregunta por el próximo envío, dile la fecha exacta (lunes o jueves, no otro día).\n"
-            "- Si pregunta por la estrategia, explica qué template toca y por qué ese enfoque.\n"
-            "- Si pregunta por emails recibidos/bandeja/respuestas, usa la lista de correos que se te pasa abajo.\n"
-            "- Sé útil y específico. Respuestas de 2-6 frases máximo, sin rollo."
+            "Eres el asistente de campaña de ADRIÀ, dueño de Reseñas Plus. Estás integrado en su sistema de email marketing.\n"
+            "Hablas con él por Telegram. Responde SIEMPRE en español natural y directo.\n\n"
+
+            "═══ LO QUE PUEDES HACER REALMENTE ═══\n"
+            "✅ Leer la bandeja del webmail de Hostalia (vía IMAP) — se hace automáticamente cuando preguntas por correos\n"
+            "✅ Consultar estadísticas de la campaña (contactos, enviados, respuestas, HOT leads)\n"
+            "✅ Mostrar ficha de un contacto concreto con /detalle email@...\n"
+            "✅ Mostrar lista de todos los contactos con /lista\n"
+            "✅ Pausar/reanudar envíos automáticos con /pausar y /reanudar\n"
+            "✅ Enviar emails manualmente con /enviar\n"
+            "✅ Analizar la campaña con datos reales y sugerir estrategia\n"
+            "✅ Explicar qué template toca y por qué ese enfoque es el adecuado\n"
+            "✅ Sugerir mejoras al copy o a la secuencia de emails\n\n"
+
+            "═══ LO QUE NO PUEDES HACER ═══\n"
+            "❌ Añadir contactos al Google Sheet (no tienes esa función)\n"
+            "❌ Enviar emails individuales personalizados desde el chat\n"
+            "❌ Acceder a Google Drive ni sincronizar archivos\n"
+            "❌ Recordar conversaciones anteriores a esta sesión\n\n"
+
+            "REGLA CRÍTICA: NUNCA digas que has hecho algo que no has hecho realmente. "
+            "Si no puedes hacer algo, dilo claramente: 'Eso no puedo hacerlo desde aquí, pero puedes...' "
+            "NO inventes acciones, NO confirmes cosas que no han pasado.\n\n"
+
+            f"═══ DATOS REALES DE LA CAMPAÑA ═══\n"
+            f"Fecha: {now.strftime('%A %d/%m/%Y %H:%M')}\n"
+            f"Próximo envío: {proximo} (solo se envía lunes y jueves)\n"
+            f"Mínimo entre emails: {MIN_DAYS_BETWEEN} días\n"
+            f"Contactos totales: {s['total']} | Contactados: {s['contacted']} | Pendientes: {s['pending']}\n"
+            f"Respondieron alguna vez: {s['total_replied']} | HOT leads: {s.get('hot_leads', 0)}\n"
+            f"Último ciclo: {s['last_sent']} enviados, {s['last_errors']} errores, {s.get('last_replies', 0)} respuestas nuevas\n"
+            f"Estado: {'⏸ PAUSADO' if _PAUSED else '▶️ Activo'}\n\n"
+
+            f"═══ SECUENCIA DE EMAILS ═══\n"
+            f"{templates_info}"
+            + inbox_context
         )
 
-        # Si el usuario pregunta por emails, lee la bandeja y añade al contexto
-        t_lower = text.lower()
-        if any(k in t_lower for k in ["mail", "correo", "email", "respuest", "respondi", "bandeja", "inbox", "contest", "buzón", "buzon", "leído", "leido", "recib"]):
-            mails = _fetch_recent_mails(10)
-            if mails:
-                context += "\n\nÚLTIMOS EMAILS RECIBIDOS EN LA BANDEJA (últimos 14 días):\n"
-                for m in mails:
-                    context += f"• {m['date']} | De: {m['from']} | Asunto: {m['subject']}\n  {m['body'][:250]}\n"
-            else:
-                context += "\n\n(Bandeja vacía o no accesible ahora mismo.)"
-
-        # Usar historial para continuidad de conversación
         with _chat_lock:
             history_copy = list(_chat_history)
 
@@ -477,11 +494,10 @@ def _ai_reply(text: str) -> None:
 
         if response:
             send_telegram_text(f"🤖 {response}")
-            # Guardar intercambio en historial (máx 6 mensajes = 3 turnos)
             with _chat_lock:
                 _chat_history.append({"role": "user", "content": text})
                 _chat_history.append({"role": "assistant", "content": response})
-                while len(_chat_history) > 6:
+                while len(_chat_history) > 8:
                     _chat_history.pop(0)
         else:
             log.warning("Groq devolvió respuesta vacía.")
