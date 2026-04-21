@@ -117,6 +117,11 @@ def send_telegram_text(text: str) -> None:
     _tg("sendMessage", json={"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "HTML"})
 
 
+def _send_typing() -> None:
+    """Muestra el indicador 'escribiendo...' en el chat de Telegram."""
+    _tg("sendChatAction", json={"chat_id": TELEGRAM_CHAT_ID, "action": "typing"})
+
+
 def send_telegram_voice(text_es: str) -> None:
     """Genera audio en español con gTTS y lo envía como nota de voz."""
     try:
@@ -220,6 +225,7 @@ _HELP_TEXT = (
     "/lista             – Ver todos los contactos con estado\n"
     "/detalle email@... – Ficha completa de un contacto\n"
     "/analisis          – Análisis IA de la campaña\n"
+    "/correos           – Ver últimos emails de la bandeja\n"
     "/ayuda             – Mostrar esta ayuda"
 )
 
@@ -376,6 +382,71 @@ def _show_lista() -> None:
         send_telegram_text(f"📋 <b>Contactos ({i+1}–{min(i+20, total)} de {total})</b>\n\n" + "\n".join(chunk))
 
 
+def _show_correos() -> None:
+    """Muestra los últimos emails recibidos en la bandeja de entrada."""
+    send_telegram_text("⏳ Leyendo bandeja de entrada...")
+    _send_typing()
+    mails = _fetch_recent_mails(10)
+    if not mails:
+        send_telegram_text("📭 No hay emails recientes o no se pudo conectar al buzón.")
+        return
+    for m in mails:
+        texto = (
+            f"📧 <b>{m['subject'] or '(sin asunto)'}</b>\n"
+            f"De: <code>{m['from']}</code>\n"
+            f"Fecha: {m['date']}\n\n"
+            f"{m['body'][:500]}"
+        )
+        send_telegram_text(texto)
+
+
+def _ai_reply(text: str) -> None:
+    """Ejecuta la llamada a la IA en un hilo y mantiene el 'escribiendo...' activo."""
+    _send_typing()
+    # Mantener typing activo en segundo plano mientras la IA responde (máx 30s)
+    stop_typing = threading.Event()
+
+    def _keep_typing():
+        while not stop_typing.is_set():
+            _send_typing()
+            stop_typing.wait(4)   # Telegram muestra 'typing' ~5s, refrescamos cada 4
+
+    typing_thread = threading.Thread(target=_keep_typing, daemon=True)
+    typing_thread.start()
+
+    try:
+        s = _state
+        context = (
+            f"Eres el asistente de ventas de Reseñas Plus, un servicio de reseñas en Google para negocios. "
+            f"Gestionas una campaña de email marketing que envía emails los lunes y jueves con 6 templates rotativos. "
+            f"Estado actual: {s['total']} contactos en total, {s['contacted']} ya contactados, "
+            f"{s['pending']} pendientes, {s['total_replied']} respondieron alguna vez, "
+            f"{s.get('hot_leads', 0)} leads calientes detectados. "
+            f"Responde SIEMPRE en español, de forma concisa, directa y útil. "
+            f"Si te preguntan datos concretos de la campaña, usa los números de arriba."
+        )
+
+        # Si el usuario pregunta por emails/correos/respuestas, lee la bandeja y pásala a la IA
+        t_lower = text.lower()
+        if any(k in t_lower for k in ["mail", "correo", "email", "respuest", "respondi", "bandeja", "inbox", "contest", "buzón", "buzon", "leído", "leido"]):
+            mails = _fetch_recent_mails(10)
+            if mails:
+                context += "\n\nÚltimos emails recibidos en la bandeja (últimos 14 días):\n"
+                for m in mails:
+                    context += f"- De: {m['from']} | Asunto: {m['subject']} | Fecha: {m['date']}\n  Extracto: {m['body'][:250]}\n"
+            else:
+                context += "\n\n(No se pudieron leer emails recientes de la bandeja.)"
+
+        response = _ai(text, system=context)
+        if response:
+            send_telegram_text(f"🤖 {response}")
+        else:
+            log.warning("Groq devolvió respuesta vacía.")
+            send_telegram_text("⚠️ La IA no respondió, inténtalo de nuevo en un momento.")
+    finally:
+        stop_typing.set()
+
+
 def _show_analisis() -> None:
     if not GROQ_API_KEY:
         send_telegram_text("⚠️ GROQ_API_KEY no configurada.")
@@ -474,6 +545,9 @@ def _handle_message(text: str, callback_id: str | None = None) -> None:
     elif cmd == "/analisis":
         threading.Thread(target=_show_analisis, daemon=True).start()
 
+    elif cmd in ("/correos", "/mails", "/bandeja"):
+        threading.Thread(target=_show_correos, daemon=True).start()
+
     elif cmd in ("/ayuda", "/help", "/start"):
         _tg_menu(_HELP_TEXT)
 
@@ -486,21 +560,7 @@ def _handle_message(text: str, callback_id: str | None = None) -> None:
                     + _HELP_TEXT
                 )
                 return
-            s = _state
-            context = (
-                f"Eres el asistente de ventas de Reseñas Plus, un servicio de reseñas en Google para negocios. "
-                f"Gestionas una campaña de email marketing. "
-                f"Estado: {s['total']} contactos, {s['contacted']} contactados, "
-                f"{s['pending']} pendientes, {s['total_replied']} respondieron, "
-                f"{s.get('hot_leads', 0)} leads calientes. "
-                f"Responde en español de forma concisa y útil."
-            )
-            response = _ai(text, system=context)
-            if response:
-                send_telegram_text(f"🤖 {response}")
-            else:
-                log.warning("Groq devolvió respuesta vacía.")
-                send_telegram_text("⚠️ La IA no respondió, inténtalo de nuevo.")
+            threading.Thread(target=_ai_reply, args=(text,), daemon=True, name="ai-reply").start()
         else:
             send_telegram_text("👋 Hola. Puedo informarte sobre mi actividad.\n\n" + _HELP_TEXT)
 
@@ -559,6 +619,39 @@ def _get_body(msg) -> str:
         except Exception:
             pass
     return ""
+
+
+def _fetch_recent_mails(limit: int = 10) -> list:
+    """Lee los últimos N emails de la bandeja de entrada (últimos 14 días)."""
+    mails = []
+    try:
+        if IMAP_PORT == 993:
+            mail = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT)
+        else:
+            mail = imaplib.IMAP4(IMAP_HOST, IMAP_PORT)
+        mail.login(SMTP_USER, SMTP_PASS)
+        mail.select("INBOX")
+        since = (datetime.now() - timedelta(days=14)).strftime("%d-%b-%Y")
+        _, data = mail.search(None, f'SINCE {since}')
+        ids = data[0].split()[-limit:]
+        for num in reversed(ids):
+            _, msg_data = mail.fetch(num, "(RFC822)")
+            msg = emaillib.message_from_bytes(msg_data[0][1])
+            from_raw = msg.get("From", "")
+            _, from_addr = parseaddr(from_raw)
+            subject = msg.get("Subject", "")
+            body    = _get_body(msg)[:400].strip()
+            date    = msg.get("Date", "")
+            mails.append({
+                "from":    from_addr or from_raw,
+                "subject": subject,
+                "body":    body,
+                "date":    date,
+            })
+        mail.logout()
+    except Exception as exc:
+        log.warning(f"Error leyendo inbox reciente: {exc}")
+    return mails
 
 
 def check_imap_replies(contacted_emails: set) -> dict:
