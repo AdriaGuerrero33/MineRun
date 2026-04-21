@@ -157,6 +157,7 @@ def _tg_menu(text: str) -> None:
 
 def _ai(prompt: str, system: str = "") -> str:
     if not GROQ_API_KEY:
+        log.warning("_ai llamada pero GROQ_API_KEY vacía.")
         return ""
     messages = []
     if system:
@@ -166,10 +167,17 @@ def _ai(prompt: str, system: str = "") -> str:
         resp = requests.post(
             "https://api.groq.com/openai/v1/chat/completions",
             headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
-            json={"model": "llama3-8b-8192", "messages": messages, "max_tokens": 600},
+            json={"model": "llama-3.1-8b-instant", "messages": messages, "max_tokens": 600},
             timeout=20,
         )
-        return resp.json()["choices"][0]["message"]["content"].strip()
+        if resp.status_code != 200:
+            log.warning(f"Groq HTTP {resp.status_code}: {resp.text[:300]}")
+            return ""
+        data = resp.json()
+        if "choices" not in data or not data["choices"]:
+            log.warning(f"Groq respuesta sin choices: {data}")
+            return ""
+        return data["choices"][0]["message"]["content"].strip()
     except Exception as exc:
         log.warning(f"Groq API error: {exc}")
         return ""
