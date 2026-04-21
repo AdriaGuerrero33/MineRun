@@ -167,8 +167,14 @@ def _ai(prompt: str, system: str = "") -> str:
         resp = requests.post(
             "https://api.groq.com/openai/v1/chat/completions",
             headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
-            json={"model": "llama-3.1-8b-instant", "messages": messages, "max_tokens": 600},
-            timeout=20,
+            json={
+                "model": "openai/gpt-oss-120b",
+                "messages": messages,
+                "temperature": 1,
+                "max_completion_tokens": 1024,
+                "top_p": 1,
+            },
+            timeout=30,
         )
         if resp.status_code != 200:
             log.warning(f"Groq HTTP {resp.status_code}: {resp.text[:300]}")
