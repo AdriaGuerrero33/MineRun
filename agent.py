@@ -464,7 +464,14 @@ def _handle_message(text: str, callback_id: str | None = None) -> None:
         _tg_menu(_HELP_TEXT)
 
     else:
-        if GROQ_API_KEY and text and not text.startswith("/"):
+        if not text.startswith("/"):
+            if not GROQ_API_KEY:
+                log.warning("Mensaje libre recibido pero GROQ_API_KEY no está configurada.")
+                send_telegram_text(
+                    "⚠️ La IA no está activada. Añade <code>GROQ_API_KEY</code> en las variables de Railway.\n\n"
+                    + _HELP_TEXT
+                )
+                return
             s = _state
             context = (
                 f"Eres el asistente de ventas de Reseñas Plus, un servicio de reseñas en Google para negocios. "
@@ -477,8 +484,11 @@ def _handle_message(text: str, callback_id: str | None = None) -> None:
             response = _ai(text, system=context)
             if response:
                 send_telegram_text(f"🤖 {response}")
-                return
-        send_telegram_text("👋 Hola. Puedo informarte sobre mi actividad.\n\n" + _HELP_TEXT)
+            else:
+                log.warning("Groq devolvió respuesta vacía.")
+                send_telegram_text("⚠️ La IA no respondió, inténtalo de nuevo.")
+        else:
+            send_telegram_text("👋 Hola. Puedo informarte sobre mi actividad.\n\n" + _HELP_TEXT)
 
 
 def _polling_loop() -> None:
