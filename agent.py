@@ -160,13 +160,15 @@ def _tg_menu(text: str) -> None:
     })
 
 
-def _ai(prompt: str, system: str = "") -> str:
+def _ai(prompt: str, system: str = "", history: list | None = None) -> str:
     if not GROQ_API_KEY:
         log.warning("_ai llamada pero GROQ_API_KEY vacía.")
         return ""
     messages = []
     if system:
         messages.append({"role": "system", "content": system})
+    if history:
+        messages.extend(history)
     messages.append({"role": "user", "content": prompt})
     try:
         resp = requests.post(
@@ -192,6 +194,11 @@ def _ai(prompt: str, system: str = "") -> str:
     except Exception as exc:
         log.warning(f"Groq API error: {exc}")
         return ""
+
+
+# Historial de conversación (últimos 6 mensajes) para que la IA tenga memoria
+_chat_history: list = []
+_chat_lock = threading.Lock()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -403,43 +410,79 @@ def _show_correos() -> None:
 def _ai_reply(text: str) -> None:
     """Ejecuta la llamada a la IA en un hilo y mantiene el 'escribiendo...' activo."""
     _send_typing()
-    # Mantener typing activo en segundo plano mientras la IA responde (máx 30s)
     stop_typing = threading.Event()
 
     def _keep_typing():
         while not stop_typing.is_set():
             _send_typing()
-            stop_typing.wait(4)   # Telegram muestra 'typing' ~5s, refrescamos cada 4
+            stop_typing.wait(4)
 
     typing_thread = threading.Thread(target=_keep_typing, daemon=True)
     typing_thread.start()
 
     try:
         s = _state
-        context = (
-            f"Eres el asistente de ventas de Reseñas Plus, un servicio de reseñas en Google para negocios. "
-            f"Gestionas una campaña de email marketing que envía emails los lunes y jueves con 6 templates rotativos. "
-            f"Estado actual: {s['total']} contactos en total, {s['contacted']} ya contactados, "
-            f"{s['pending']} pendientes, {s['total_replied']} respondieron alguna vez, "
-            f"{s.get('hot_leads', 0)} leads calientes detectados. "
-            f"Responde SIEMPRE en español, de forma concisa, directa y útil. "
-            f"Si te preguntan datos concretos de la campaña, usa los números de arriba."
+        now = datetime.now()
+        proximo = _next_send_day()
+
+        templates_info = (
+            "Los 6 templates de email que rotan (cada contacto recibe uno distinto en cada envío):\n"
+            "  1. '¿Al final lo descartasteis o seguís interesados?' (re-engagement directo)\n"
+            "  2. 'Lo que están consiguiendo otros negocios como el vuestro' (prueba social con casos)\n"
+            "  3. 'Una pregunta sobre vuestras reseñas' (pregunta calibrada estilo Chris Voss)\n"
+            "  4. '¿Sabéis cuánto os cuesta no tener reseñas?' (coste de inacción con datos)\n"
+            "  5. 'Lo que me dijo un cliente la semana pasada' (storytelling)\n"
+            "  6. '¿Seguimos en contacto o lo dejamos?' (soft re-engagement con opción BAJA)"
         )
 
-        # Si el usuario pregunta por emails/correos/respuestas, lee la bandeja y pásala a la IA
+        context = (
+            "Eres el asistente personal de ADRIÁ, dueño de Reseñas Plus (servicio de reseñas en Google para negocios locales en España). "
+            "Estás hablando con ÉL por Telegram, no con un cliente. Él gestiona una campaña de email marketing automática que tú mismo controlas.\n\n"
+            f"INFO DE LA CAMPAÑA:\n"
+            f"- Hoy es {now.strftime('%A %d/%m/%Y %H:%M')} (zona horaria Madrid).\n"
+            f"- Los envíos se hacen SOLO los LUNES y JUEVES.\n"
+            f"- Próximo envío programado: {proximo}.\n"
+            f"- Entre emails pasan mínimo {MIN_DAYS_BETWEEN} días.\n"
+            f"- Total contactos: {s['total']} | Ya contactados: {s['contacted']} | Pendientes: {s['pending']}\n"
+            f"- Han respondido en total: {s['total_replied']} | HOT leads detectados: {s.get('hot_leads', 0)}\n"
+            f"- Último ciclo: {s['last_sent']} enviados, {s['last_errors']} errores, {s.get('last_replies', 0)} respuestas nuevas.\n"
+            f"- Pausado: {'SÍ' if _PAUSED else 'NO'}.\n\n"
+            f"{templates_info}\n\n"
+            "COMPORTAMIENTO:\n"
+            "- Responde SIEMPRE en español natural, conversacional, directo. Como un colega, no como un formulario.\n"
+            "- NUNCA saludes con '¡Hola! ¿En qué puedo ayudarte?' — ve al grano.\n"
+            "- Si pregunta datos, dale los números reales de arriba.\n"
+            "- Si pregunta por el próximo envío, dile la fecha exacta (lunes o jueves, no otro día).\n"
+            "- Si pregunta por la estrategia, explica qué template toca y por qué ese enfoque.\n"
+            "- Si pregunta por emails recibidos/bandeja/respuestas, usa la lista de correos que se te pasa abajo.\n"
+            "- Sé útil y específico. Respuestas de 2-6 frases máximo, sin rollo."
+        )
+
+        # Si el usuario pregunta por emails, lee la bandeja y añade al contexto
         t_lower = text.lower()
-        if any(k in t_lower for k in ["mail", "correo", "email", "respuest", "respondi", "bandeja", "inbox", "contest", "buzón", "buzon", "leído", "leido"]):
+        if any(k in t_lower for k in ["mail", "correo", "email", "respuest", "respondi", "bandeja", "inbox", "contest", "buzón", "buzon", "leído", "leido", "recib"]):
             mails = _fetch_recent_mails(10)
             if mails:
-                context += "\n\nÚltimos emails recibidos en la bandeja (últimos 14 días):\n"
+                context += "\n\nÚLTIMOS EMAILS RECIBIDOS EN LA BANDEJA (últimos 14 días):\n"
                 for m in mails:
-                    context += f"- De: {m['from']} | Asunto: {m['subject']} | Fecha: {m['date']}\n  Extracto: {m['body'][:250]}\n"
+                    context += f"• {m['date']} | De: {m['from']} | Asunto: {m['subject']}\n  {m['body'][:250]}\n"
             else:
-                context += "\n\n(No se pudieron leer emails recientes de la bandeja.)"
+                context += "\n\n(Bandeja vacía o no accesible ahora mismo.)"
 
-        response = _ai(text, system=context)
+        # Usar historial para continuidad de conversación
+        with _chat_lock:
+            history_copy = list(_chat_history)
+
+        response = _ai(text, system=context, history=history_copy)
+
         if response:
             send_telegram_text(f"🤖 {response}")
+            # Guardar intercambio en historial (máx 6 mensajes = 3 turnos)
+            with _chat_lock:
+                _chat_history.append({"role": "user", "content": text})
+                _chat_history.append({"role": "assistant", "content": response})
+                while len(_chat_history) > 6:
+                    _chat_history.pop(0)
         else:
             log.warning("Groq devolvió respuesta vacía.")
             send_telegram_text("⚠️ La IA no respondió, inténtalo de nuevo en un momento.")
