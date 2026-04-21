@@ -47,6 +47,9 @@ FROM_EMAIL       = os.getenv("FROM_EMAIL", SMTP_USER)
 # ── Config Brevo API (alternativa a SMTP, no bloqueada por Railway) ───────────
 BREVO_API_KEY    = os.getenv("BREVO_API_KEY", "")
 
+# ── Config Groq IA ────────────────────────────────────────────────────────────
+GROQ_API_KEY     = os.getenv("GROQ_API_KEY", "")
+
 IMAP_HOST        = os.getenv("IMAP_HOST", "217.116.0.237")
 IMAP_PORT        = int(os.getenv("IMAP_PORT", "143"))
 
@@ -58,7 +61,8 @@ COL_EMAIL        = os.getenv("COL_EMAIL", "Email")
 COL_PRODUCT      = os.getenv("COL_PRODUCT", "Producto")
 COL_SENT         = "Enviado"
 COL_REPLIED      = "Contestado"
-COL_SEQ          = "Secuencia"   # nº de email enviado: 1, 2 o 3
+COL_SEQ          = "Secuencia"
+COL_ESTADO       = "Estado"      # HOT | BAJA | Contestado
 
 # ── Config Telegram ───────────────────────────────────────────────────────────
 TELEGRAM_TOKEN   = os.getenv("TELEGRAM_BOT_TOKEN", "")
@@ -66,7 +70,10 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
 # ── Intervalo ─────────────────────────────────────────────────────────────────
 CHECK_INTERVAL_H = int(os.getenv("CHECK_INTERVAL_HOURS", "12"))
-MIN_DAYS_BETWEEN = int(os.getenv("MIN_DAYS_BETWEEN_EMAILS", "3"))   # mín. días entre emails
+MIN_DAYS_BETWEEN = int(os.getenv("MIN_DAYS_BETWEEN_EMAILS", "3"))
+
+# ── Estado global ─────────────────────────────────────────────────────────────
+_PAUSED = False
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
@@ -125,6 +132,49 @@ def send_telegram_voice(text_es: str) -> None:
         send_telegram_text("⚠️ No se pudo generar la nota de voz. Revisa el log.")
 
 
+MAIN_KEYBOARD = {
+    "inline_keyboard": [[
+        {"text": "📊 Estado",   "callback_data": "/estado"},
+        {"text": "📤 Enviar",   "callback_data": "/enviar"},
+    ], [
+        {"text": "⏸ Pausar",   "callback_data": "/pausar"},
+        {"text": "📋 Ayuda",    "callback_data": "/ayuda"},
+    ], [
+        {"text": "📋 Lista",    "callback_data": "/lista"},
+        {"text": "📈 Análisis", "callback_data": "/analisis"},
+    ]]
+}
+
+
+def _tg_menu(text: str) -> None:
+    _tg("sendMessage", json={
+        "chat_id":      TELEGRAM_CHAT_ID,
+        "text":         text,
+        "parse_mode":   "HTML",
+        "reply_markup": MAIN_KEYBOARD,
+    })
+
+
+def _ai(prompt: str, system: str = "") -> str:
+    if not GROQ_API_KEY:
+        return ""
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+    try:
+        resp = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
+            json={"model": "llama3-8b-8192", "messages": messages, "max_tokens": 600},
+            timeout=20,
+        )
+        return resp.json()["choices"][0]["message"]["content"].strip()
+    except Exception as exc:
+        log.warning(f"Groq API error: {exc}")
+        return ""
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Chat bidireccional con Telegram
 # ─────────────────────────────────────────────────────────────────────────────
@@ -139,6 +189,8 @@ _state: dict = {
     "contacted":     0,
     "pending":       0,
     "total_replied": 0,
+    "hot_leads":     0,
+    "last_replies":  0,
 }
 
 _HELP_TEXT = (
@@ -149,6 +201,11 @@ _HELP_TEXT = (
     "/enviar            – Enviar ahora a toda la lista\n"
     "/enviar email@...  – Enviar ahora a un contacto concreto\n"
     "/reiniciar         – Resetear secuencia de todos los contactos\n"
+    "/pausar            – Pausar envíos automáticos\n"
+    "/reanudar          – Reanudar envíos automáticos\n"
+    "/lista             – Ver todos los contactos con estado\n"
+    "/detalle email@... – Ficha completa de un contacto\n"
+    "/analisis          – Análisis IA de la campaña\n"
     "/ayuda             – Mostrar esta ayuda"
 )
 
@@ -242,16 +299,108 @@ def _manual_send(target_email: str | None = None) -> None:
     send_telegram_text(resumen)
 
 
-def _handle_message(text: str) -> None:
+def _show_detalle(target: str) -> None:
+    try:
+        sheet   = get_worksheet()
+        records = sheet.get_all_records()
+    except Exception as exc:
+        send_telegram_text(f"🚨 Error leyendo el Sheet: {exc}")
+        return
+    for row in records:
+        email_val = str(row.get(COL_EMAIL, "")).strip().lower()
+        if email_val != target.lower().strip():
+            continue
+        seq      = str(row.get(COL_SEQ, "0") or "0")
+        sent_ts  = str(row.get(COL_SENT, "")).strip() or "Nunca"
+        replied  = str(row.get(COL_REPLIED, "")).strip() or "No"
+        estado   = str(row.get(COL_ESTADO, "")).strip() or "—"
+        tmpl_num = (int(seq or "0") % 6) + 1
+        send_telegram_text(
+            f"📋 <b>{email_val}</b>\n\n"
+            f"Secuencia: email #{seq} (próximo: template {tmpl_num})\n"
+            f"Último envío: {sent_ts}\n"
+            f"Estado: {estado}\n"
+            f"Contestado: {replied}"
+        )
+        return
+    send_telegram_text(f"⚠️ No encontré el contacto <code>{target}</code> en el Sheet.")
+
+
+def _show_lista() -> None:
+    try:
+        sheet   = get_worksheet()
+        records = sheet.get_all_records()
+    except Exception as exc:
+        send_telegram_text(f"🚨 Error leyendo el Sheet: {exc}")
+        return
+    lines = []
+    for row in records:
+        email_val = str(row.get(COL_EMAIL, "")).strip().lower()
+        if not email_val or "@" not in email_val:
+            continue
+        seq     = int(str(row.get(COL_SEQ, "0") or "0"))
+        estado  = str(row.get(COL_ESTADO, "")).strip()
+        replied = str(row.get(COL_REPLIED, "")).strip()
+        if estado == "HOT":
+            icon = "🔥"
+        elif estado == "BAJA":
+            icon = "🚫"
+        elif replied:
+            icon = "💬"
+        elif seq >= 1:
+            icon = "📤"
+        else:
+            icon = "⏳"
+        label = estado if estado else (f"email #{seq}" if seq >= 1 else "pendiente")
+        lines.append(f"{icon} {email_val} — {label}")
+    if not lines:
+        send_telegram_text("📋 No hay contactos en el Sheet.")
+        return
+    total = len(lines)
+    for i in range(0, total, 20):
+        chunk = lines[i:i + 20]
+        send_telegram_text(f"📋 <b>Contactos ({i+1}–{min(i+20, total)} de {total})</b>\n\n" + "\n".join(chunk))
+
+
+def _show_analisis() -> None:
+    if not GROQ_API_KEY:
+        send_telegram_text("⚠️ GROQ_API_KEY no configurada.")
+        return
+    send_telegram_text("🤖 Analizando campaña con IA...")
+    s = _state
+    prompt = (
+        f"Analiza esta campaña de email marketing para reseñas en Google:\n"
+        f"- Total: {s['total']} contactos\n"
+        f"- Contactados: {s['contacted']}\n"
+        f"- Pendientes: {s['pending']}\n"
+        f"- Respondieron: {s['total_replied']}\n"
+        f"- HOT leads: {s.get('hot_leads', 0)}\n"
+        f"- Enviados último ciclo: {s['last_sent']}\n"
+        f"- Errores último ciclo: {s['last_errors']}\n\n"
+        f"Da 3-4 insights accionables en español. Sé conciso."
+    )
+    analysis = _ai(prompt, system="Eres experto en email marketing B2B. Da recomendaciones concretas en español.")
+    if analysis:
+        send_telegram_text(f"📈 <b>Análisis IA</b>\n\n{analysis}")
+    else:
+        send_telegram_text("⚠️ No se pudo obtener análisis de la IA.")
+
+
+def _handle_message(text: str, callback_id: str | None = None) -> None:
+    global _PAUSED
     parts = text.strip().split()
     cmd   = parts[0].lower() if parts else ""
+
+    if callback_id:
+        _tg("answerCallbackQuery", json={"callback_query_id": callback_id})
 
     if cmd in ("/estado", "/status"):
         s = _state
         lr = s["last_run"].strftime("%d/%m/%Y %H:%M") if s["last_run"] else "Aún no ha corrido"
         nr = s["next_run"].strftime("%d/%m/%Y %H:%M") if s["next_run"] else "Pendiente"
+        pausa = " ⏸ <b>PAUSADO</b>" if _PAUSED else ""
         reply = (
-            "📊 <b>Estado actual del agente</b>\n\n"
+            f"📊 <b>Estado actual del agente</b>{pausa}\n\n"
             f"🕐 Última revisión: <b>{lr}</b>\n"
             f"🔜 Próxima revisión: <b>{nr}</b>\n\n"
             f"✉️ Emails enviados (último ciclo): <b>{s['last_sent']}</b>\n"
@@ -259,7 +408,8 @@ def _handle_message(text: str) -> None:
             f"👥 Total contactos: <b>{s['total']}</b>\n"
             f"✅ Ya contactados: <b>{s['contacted']}</b>\n"
             f"⏳ Pendientes: <b>{s['pending']}</b>\n"
-            f"💬 Han respondido: <b>{s['total_replied']}</b>"
+            f"💬 Han respondido: <b>{s['total_replied']}</b>\n"
+            f"🔥 Leads calientes: <b>{s.get('hot_leads', 0)}</b>"
         )
         send_telegram_text(reply)
 
@@ -277,53 +427,91 @@ def _handle_message(text: str) -> None:
         send_telegram_text(
             "🤖 <b>¿Qué hago?</b>\n\n"
             "Soy un agente de email marketing automático. Los lunes y jueves:\n\n"
-            "1️⃣ Leo tu Google Sheet y envío el siguiente email de la secuencia a cada contacto\n"
-            "2️⃣ Reviso tu bandeja de entrada para detectar quién ha respondido\n"
-            "3️⃣ Te mando un reporte con las estadísticas\n\n"
-            "Tengo 6 templates distintos que van rotando. Solo paro si el contacto responde o pide BAJA.\n\n"
+            "1️⃣ Leo tu Google Sheet y envío el siguiente email de la secuencia\n"
+            "2️⃣ Reviso la bandeja de entrada y clasifico respuestas con IA (HOT/BAJA)\n"
+            "3️⃣ Te mando reporte de texto y audio\n\n"
             f"⏱ Reviso cada <b>{CHECK_INTERVAL_H} horas</b>"
         )
 
     elif cmd == "/reiniciar":
-        threading.Thread(
-            target=_reset_sequences, daemon=True, name="reset"
-        ).start()
+        threading.Thread(target=_reset_sequences, daemon=True, name="reset").start()
 
     elif cmd == "/enviar":
-        # /enviar → toda la lista | /enviar email@... → contacto concreto
         target = parts[1] if len(parts) > 1 else None
-        threading.Thread(
-            target=_manual_send, args=(target,), daemon=True, name="manual-send"
-        ).start()
+        threading.Thread(target=_manual_send, args=(target,), daemon=True, name="manual-send").start()
+
+    elif cmd == "/pausar":
+        _PAUSED = True
+        send_telegram_text("⏸ <b>Envíos pausados.</b>\nUsa /reanudar para volver a activar.")
+
+    elif cmd == "/reanudar":
+        _PAUSED = False
+        send_telegram_text("▶️ <b>Envíos reanudados.</b>")
+
+    elif cmd == "/detalle":
+        if len(parts) > 1:
+            threading.Thread(target=_show_detalle, args=(parts[1],), daemon=True).start()
+        else:
+            send_telegram_text("⚠️ Uso: /detalle email@ejemplo.com")
+
+    elif cmd == "/lista":
+        threading.Thread(target=_show_lista, daemon=True).start()
+
+    elif cmd == "/analisis":
+        threading.Thread(target=_show_analisis, daemon=True).start()
 
     elif cmd in ("/ayuda", "/help", "/start"):
-        send_telegram_text(_HELP_TEXT)
+        _tg_menu(_HELP_TEXT)
 
     else:
+        if GROQ_API_KEY and text and not text.startswith("/"):
+            s = _state
+            context = (
+                f"Eres el asistente de ventas de Reseñas Plus, un servicio de reseñas en Google para negocios. "
+                f"Gestionas una campaña de email marketing. "
+                f"Estado: {s['total']} contactos, {s['contacted']} contactados, "
+                f"{s['pending']} pendientes, {s['total_replied']} respondieron, "
+                f"{s.get('hot_leads', 0)} leads calientes. "
+                f"Responde en español de forma concisa y útil."
+            )
+            response = _ai(text, system=context)
+            if response:
+                send_telegram_text(f"🤖 {response}")
+                return
         send_telegram_text("👋 Hola. Puedo informarte sobre mi actividad.\n\n" + _HELP_TEXT)
 
 
 def _polling_loop() -> None:
-    """Hilo en segundo plano que escucha mensajes entrantes de Telegram."""
     offset = 0
     while True:
         try:
             resp = requests.post(
                 f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates",
-                json={"offset": offset, "timeout": 30, "allowed_updates": ["message"]},
+                json={"offset": offset, "timeout": 30, "allowed_updates": ["message", "callback_query"]},
                 timeout=40,
             )
             data = resp.json()
             for update in data.get("result", []):
                 offset = update["update_id"] + 1
-                msg = update.get("message", {})
-                chat_id = str(msg.get("chat", {}).get("id", ""))
-                if chat_id != str(TELEGRAM_CHAT_ID):
-                    continue
-                text = msg.get("text", "")
-                if text:
-                    log.info(f"Mensaje Telegram recibido: {text!r}")
-                    _handle_message(text)
+                if "message" in update:
+                    msg = update["message"]
+                    chat_id = str(msg.get("chat", {}).get("id", ""))
+                    if chat_id != str(TELEGRAM_CHAT_ID):
+                        continue
+                    text = msg.get("text", "")
+                    if text:
+                        log.info(f"Mensaje Telegram: {text!r}")
+                        _handle_message(text)
+                elif "callback_query" in update:
+                    cq = update["callback_query"]
+                    chat_id = str(cq.get("message", {}).get("chat", {}).get("id", ""))
+                    if chat_id != str(TELEGRAM_CHAT_ID):
+                        continue
+                    data_text = cq.get("data", "")
+                    cb_id     = cq.get("id", "")
+                    if data_text:
+                        log.info(f"Callback Telegram: {data_text!r}")
+                        _handle_message(data_text, callback_id=cb_id)
         except Exception as exc:
             log.warning(f"Telegram polling error: {exc}")
             time.sleep(5)
@@ -333,17 +521,27 @@ def _polling_loop() -> None:
 # IMAP – detección de respuestas
 # ─────────────────────────────────────────────────────────────────────────────
 
-def check_imap_replies(contacted_emails: set[str]) -> list[str]:
-    """
-    Conecta al buzón de entrada y devuelve la lista de emails
-    de contactos que han respondido en los últimos 7 días.
-    """
-    replied = []
+def _get_body(msg) -> str:
+    if msg.is_multipart():
+        for part in msg.walk():
+            if part.get_content_type() == "text/plain":
+                try:
+                    return part.get_payload(decode=True).decode("utf-8", errors="ignore")
+                except Exception:
+                    pass
+    else:
+        try:
+            return msg.get_payload(decode=True).decode("utf-8", errors="ignore")
+        except Exception:
+            pass
+    return ""
+
+
+def check_imap_replies(contacted_emails: set) -> dict:
+    replies = {}
     if not contacted_emails:
-        return replied
-
+        return replies
     since = (datetime.now() - timedelta(days=7)).strftime("%d-%b-%Y")
-
     try:
         if IMAP_PORT == 993:
             mail = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT)
@@ -351,11 +549,9 @@ def check_imap_replies(contacted_emails: set[str]) -> list[str]:
             mail = imaplib.IMAP4(IMAP_HOST, IMAP_PORT)
         mail.login(SMTP_USER, SMTP_PASS)
         mail.select("INBOX")
-
         _, data = mail.search(None, f'SINCE {since}')
         ids = data[0].split()
-        log.info(f"IMAP: {len(ids)} emails en bandeja de entrada (últimos 7 días).")
-
+        log.info(f"IMAP: {len(ids)} emails en bandeja (últimos 7 días).")
         for num in ids:
             _, msg_data = mail.fetch(num, "(RFC822)")
             raw = msg_data[0][1]
@@ -363,15 +559,34 @@ def check_imap_replies(contacted_emails: set[str]) -> list[str]:
             from_raw = msg.get("From", "")
             _, from_addr = parseaddr(from_raw)
             from_addr = from_addr.lower().strip()
-            if from_addr in contacted_emails:
-                replied.append(from_addr)
-                log.info(f"  Respuesta detectada de: {from_addr}")
-
+            if from_addr not in contacted_emails:
+                continue
+            subject = msg.get("Subject", "").lower()
+            body    = _get_body(msg).lower()
+            snippet = (subject + " " + body[:300]).strip()
+            estado = "Contestado"
+            if GROQ_API_KEY:
+                clasificacion = _ai(
+                    f"Clasifica esta respuesta de email: HOT, BAJA o NEUTRAL.\n"
+                    f"HOT=interesado. BAJA=no quiere más emails. NEUTRAL=otro.\n"
+                    f"Texto: {snippet}\nResponde solo la palabra:",
+                    system="Clasificador de emails. Responde solo: HOT, BAJA o NEUTRAL.",
+                )
+                word = clasificacion.strip().upper().split()[0] if clasificacion else "NEUTRAL"
+                if word in ("HOT", "BAJA"):
+                    estado = word
+            else:
+                combined = subject + " " + body
+                if any(k in combined for k in ["baja", "no me interesa", "desuscrib", "elimina", "no gracias", "stop"]):
+                    estado = "BAJA"
+                elif any(k in combined for k in ["sí", "si ", "interesa", "cuánto", "precio", "llamada", "info"]):
+                    estado = "HOT"
+            replies[from_addr] = estado
+            log.info(f"  Respuesta de {from_addr}: {estado}")
         mail.logout()
     except Exception as exc:
         log.warning(f"IMAP check falló: {exc}")
-
-    return replied
+    return replies
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -669,7 +884,7 @@ def send_email(to_email: str, msg: MIMEMultipart) -> None:
 def build_voice_script(
     sent: int, errors: int,
     total: int, already_contacted: int, pending: int,
-    new_replies: list[str], total_replied: int,
+    new_replies: int, total_replied: int,
 ) -> str:
     now       = datetime.now()
     next_run  = now + timedelta(hours=CHECK_INTERVAL_H)
@@ -685,7 +900,7 @@ def build_voice_script(
         "",
         f"Revisando tu bandeja de entrada, "
         + (
-            f"hemos detectado {len(new_replies)} respuestas nuevas esta semana. "
+            f"hemos detectado {new_replies} respuestas nuevas esta semana. "
             if new_replies else
             "no hemos detectado respuestas nuevas esta semana. "
         )
@@ -707,6 +922,36 @@ def build_voice_script(
     return " ".join(l for l in lines if l)
 
 
+def _next_send_day() -> str:
+    now = datetime.now()
+    day_names = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
+    for delta in range(1, 8):
+        candidate = now + timedelta(days=delta)
+        if candidate.weekday() in (0, 3):
+            if delta == 1:
+                return "mañana"
+            return f"el {day_names[candidate.weekday()]}"
+    return "pronto"
+
+
+def _briefing_loop() -> None:
+    while True:
+        now    = datetime.now()
+        target = now.replace(hour=9, minute=0, second=0, microsecond=0)
+        if now >= target:
+            target += timedelta(days=1)
+        time.sleep((target - now).total_seconds())
+        s = _state
+        send_telegram_text(
+            "☀️ <b>Buenos días — Resumen de ayer</b>\n\n"
+            f"✉️ Enviados: <b>{s['last_sent']}</b>\n"
+            f"🔥 Leads calientes: <b>{s.get('hot_leads', 0)}</b>\n"
+            f"💬 Respuestas nuevas: <b>{s.get('last_replies', 0)}</b>\n"
+            f"⏳ Pendientes en lista: <b>{s['pending']}</b>\n\n"
+            f"📅 Próximo envío: {_next_send_day()}"
+        )
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Ciclo principal
 # ─────────────────────────────────────────────────────────────────────────────
@@ -725,10 +970,11 @@ def run_cycle():
         send_telegram_text(f"🚨 <b>Agente Email Marketing</b>\n{msg}")
         return
 
-    total     = len(records)
-    sent_col  = ensure_column(sheet, headers, COL_SENT)
-    reply_col = ensure_column(sheet, headers, COL_REPLIED)
-    seq_col   = ensure_column(sheet, headers, COL_SEQ)
+    total      = len(records)
+    sent_col   = ensure_column(sheet, headers, COL_SENT)
+    reply_col  = ensure_column(sheet, headers, COL_REPLIED)
+    seq_col    = ensure_column(sheet, headers, COL_SEQ)
+    estado_col = ensure_column(sheet, headers, COL_ESTADO)
 
     hoy_es_dia_envio = is_send_day()
     log.info(f"Hoy es {'lunes/jueves ✓ — se enviarán emails' if hoy_es_dia_envio else 'día de solo monitorización (no se envían emails)'}.")
@@ -755,6 +1001,8 @@ def run_cycle():
             continue
         # No enviar más si ya contestó o se dio de baja
         if was_replied:
+            continue
+        if str(row.get(COL_ESTADO, "")).strip() == "BAJA":
             continue
         # El siguiente email requiere MIN_DAYS_BETWEEN días desde el último
         if seq >= 1 and days_since(was_sent) < MIN_DAYS_BETWEEN:
@@ -794,15 +1042,37 @@ def run_cycle():
         log.info("Sin contactos pendientes que enviar.")
 
     # ── Revisar respuestas por IMAP ───────────────────────────────────────────
-    new_replies = check_imap_replies(contacted_emails - already_replied)
+    new_replies_dict = check_imap_replies(contacted_emails - already_replied)
+    hot_count   = 0
+    reply_count = len(new_replies_dict)
 
     stamp_reply = datetime.now().strftime("%Y-%m-%d %H:%M")
     for row_idx, row in enumerate(records, start=2):
         email_val = str(row.get(COL_EMAIL, "")).strip().lower()
-        if email_val in new_replies:
-            sheet.update_cell(row_idx, reply_col, stamp_reply)
-            already_replied.add(email_val)
-            log.info(f"  Marcado como contestado: {email_val}")
+        if email_val not in new_replies_dict:
+            continue
+        estado_nuevo = new_replies_dict[email_val]
+        sheet.update_cell(row_idx, reply_col, stamp_reply)
+        sheet.update_cell(row_idx, estado_col, estado_nuevo)
+        already_replied.add(email_val)
+        log.info(f"  Marcado {email_val} → {estado_nuevo}")
+        if estado_nuevo == "HOT":
+            hot_count += 1
+            sugerencia = ""
+            if GROQ_API_KEY:
+                s_raw = _ai(
+                    "Un lead interesado en reseñas Google respondió a un email de ventas. "
+                    "Genera un borrador corto de respuesta en español para confirmar una llamada. Máximo 3 frases.",
+                    system="Experto en ventas B2B. Emails breves y directos en español.",
+                )
+                if s_raw:
+                    sugerencia = f"\n\n🤖 <b>Respuesta sugerida:</b>\n<i>{s_raw}</i>"
+            send_telegram_text(
+                f"🔥 <b>LEAD CALIENTE</b>\n\n"
+                f"📧 {email_val}\n→ Ha respondido mostrando interés\n→ <b>Respóndele ahora</b>" + sugerencia
+            )
+        elif estado_nuevo == "BAJA":
+            send_telegram_text(f"🚫 <b>Baja registrada</b>\n\n📧 {email_val}\n→ No se le contactará más.")
 
     # ── Estadísticas finales ──────────────────────────────────────────────────
     total_replied = len(already_replied)
@@ -818,8 +1088,10 @@ def run_cycle():
     _state["contacted"]     = len(contacted_emails)
     _state["pending"]       = pending_final
     _state["total_replied"] = total_replied
+    _state["hot_leads"]     = _state.get("hot_leads", 0) + hot_count
+    _state["last_replies"]  = reply_count
 
-    log.info(f"Ciclo terminado — Enviados: {sent} | Respuestas nuevas: {len(new_replies)} | "
+    log.info(f"Ciclo terminado — Enviados: {sent} | Respuestas nuevas: {reply_count} | "
              f"Total respondido: {total_replied}")
 
     # ── Reporte texto por Telegram ────────────────────────────────────────────
@@ -828,7 +1100,8 @@ def run_cycle():
         f"📅 {datetime.now().strftime('%d/%m/%Y %H:%M')}\n\n"
         f"✉️ Emails enviados esta semana: <b>{sent}</b>\n"
         f"❌ Errores: <b>{errors}</b>\n\n"
-        f"💬 Respuestas nuevas detectadas: <b>{len(new_replies)}</b>\n"
+        f"💬 Respuestas nuevas detectadas: <b>{reply_count}</b>\n"
+        f"🔥 HOT leads este ciclo: <b>{hot_count}</b>\n"
         f"🎯 Oportunidades reales (total respondido): <b>{total_replied}</b>\n\n"
         f"👥 Total contactos: <b>{total}</b>\n"
         f"✅ Ya contactados: <b>{len(contacted_emails)}</b>\n"
@@ -842,7 +1115,7 @@ def run_cycle():
         sent=sent, errors=errors,
         total=total, already_contacted=len(contacted_emails),
         pending=pending_final,
-        new_replies=new_replies, total_replied=total_replied,
+        new_replies=reply_count, total_replied=total_replied,
     )
     send_telegram_voice(voice_script)
 
@@ -857,6 +1130,7 @@ def main():
     log.info(f"  Revisión cada {CHECK_INTERVAL_H}h  |  SMTP {SMTP_HOST}:{SMTP_PORT}")
     log.info(f"  IMAP {IMAP_HOST}:{IMAP_PORT}")
     log.info(f"  Telegram: {'configurado ✓' if TELEGRAM_TOKEN else 'no configurado'}")
+    log.info(f"  Groq IA: {'activa ✓' if GROQ_API_KEY else 'no configurada'}")
     log.info("═══════════════════════════════════════════════════")
 
     # Arrancar hilo de escucha de mensajes Telegram
@@ -864,12 +1138,13 @@ def main():
         t = threading.Thread(target=_polling_loop, daemon=True, name="tg-poll")
         t.start()
         log.info("Hilo de chat Telegram arrancado.")
+        threading.Thread(target=_briefing_loop, daemon=True, name="briefing").start()
 
-    send_telegram_text(
+    _tg_menu(
         "🚀 <b>Agente de Email Marketing arrancado</b>\n"
         f"Revisaré el Sheet cada <b>{CHECK_INTERVAL_H}h</b>, "
         f"detectaré respuestas automáticamente y te enviaré un reporte de texto y audio.\n\n"
-        "💬 Ya puedes escribirme. Prueba con /ayuda"
+        "📱 Usa los botones o escríbeme directamente:"
     )
 
     while True:
