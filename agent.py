@@ -469,9 +469,15 @@ def _ai_reply(text: str) -> None:
             "❌ Acceder a Google Drive ni sincronizar archivos\n"
             "❌ Recordar conversaciones anteriores a esta sesión\n\n"
 
-            "REGLA CRÍTICA: NUNCA digas que has hecho algo que no has hecho realmente. "
-            "Si no puedes hacer algo, dilo claramente: 'Eso no puedo hacerlo desde aquí, pero puedes...' "
-            "NO inventes acciones, NO confirmes cosas que no han pasado.\n\n"
+            "REGLAS CRÍTICAS:\n"
+            "1. NUNCA escribas comandos como /enviar, /lista, /estadísticas en tus respuestas. "
+            "Yo ejecuto las acciones directamente cuando el usuario me lo pide en lenguaje natural. "
+            "No finjas ejecutar comandos en el chat — eso confunde al usuario.\n"
+            "2. NUNCA confirmes que has hecho algo que no has hecho. "
+            "Si la acción ya se ejecutó, el sistema ya habrá respondido. Tú solo comenta o explica.\n"
+            "3. Si el usuario quiere enviar emails, dile simplemente 'Vale, enviando ahora' — "
+            "el sistema lo hace automáticamente sin necesidad de comandos.\n"
+            "4. NO inventes estadísticas ni datos. Usa solo los números que tienes en el contexto.\n\n"
 
             f"═══ DATOS REALES DE LA CAMPAÑA ═══\n"
             f"Fecha: {now.strftime('%A %d/%m/%Y %H:%M')}\n"
@@ -530,6 +536,36 @@ def _show_analisis() -> None:
         send_telegram_text("⚠️ No se pudo obtener análisis de la IA.")
 
 
+def _detect_intent(text: str) -> str | None:
+    """Detecta intención de acción en lenguaje natural. Devuelve la acción o None."""
+    t = text.lower().strip()
+
+    # Enviar a todos los pendientes
+    if re.search(r"(env[íi]a?|manda?|lanza)\b.*(pendiente|todo|lista|todos)", t):
+        return "enviar_todos"
+    # Enviar a email concreto
+    m = re.search(r"(env[íi]a?|manda?)\b.*?([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})", t)
+    if m:
+        return f"enviar_{m.group(2)}"
+    # Pausar
+    if re.search(r"(pausa|para|detén|deten)\b.*(env[íi]o|mails?|correo)", t):
+        return "pausar"
+    # Reanudar
+    if re.search(r"(reanuda|activa|arranca)\b.*(env[íi]o|mails?|correo)", t):
+        return "reanudar"
+    # Mostrar lista
+    if re.search(r"(mu[eé]stra(me)?|dame|ve[oó]|lista)\b.*(contacto|lista|pendiente)", t):
+        return "lista"
+    # Mostrar correos bandeja
+    if re.search(r"(lee|mu[eé]stra(me)?|dame|abr[eo])\b.*(correo|mail|bandeja|inbox|respuest)", t):
+        return "correos"
+    # Estado
+    if re.search(r"(estado|estad[íi]stica|como (va|está|esta)|cu[aá]ntos|resumen)\b", t):
+        return "estado"
+
+    return None
+
+
 def _handle_message(text: str, callback_id: str | None = None) -> None:
     global _PAUSED
     parts = text.strip().split()
@@ -582,6 +618,14 @@ def _handle_message(text: str, callback_id: str | None = None) -> None:
 
     elif cmd == "/enviar":
         target = parts[1] if len(parts) > 1 else None
+        # Validar que si hay argumento sea un email, no una palabra suelta
+        if target and "@" not in target:
+            send_telegram_text(
+                "⚠️ Uso correcto:\n"
+                "/enviar → envía a todos los pendientes\n"
+                "/enviar email@ejemplo.com → envía a ese contacto"
+            )
+            return
         threading.Thread(target=_manual_send, args=(target,), daemon=True, name="manual-send").start()
 
     elif cmd == "/pausar":
@@ -612,8 +656,36 @@ def _handle_message(text: str, callback_id: str | None = None) -> None:
 
     else:
         if not text.startswith("/"):
+            # Detectar intención de acción antes de llamar a la IA
+            intent = _detect_intent(text)
+            if intent == "enviar_todos":
+                send_telegram_text("📤 Enviando a todos los pendientes...")
+                threading.Thread(target=_manual_send, args=(None,), daemon=True, name="manual-send").start()
+                return
+            elif intent and intent.startswith("enviar_"):
+                email_target = intent[7:]
+                send_telegram_text(f"📤 Enviando a <code>{email_target}</code>...")
+                threading.Thread(target=_manual_send, args=(email_target,), daemon=True, name="manual-send").start()
+                return
+            elif intent == "pausar":
+                _PAUSED = True
+                send_telegram_text("⏸ <b>Envíos pausados.</b> Escríbeme 'reanuda los envíos' para activarlos.")
+                return
+            elif intent == "reanudar":
+                _PAUSED = False
+                send_telegram_text("▶️ <b>Envíos reanudados.</b>")
+                return
+            elif intent == "lista":
+                threading.Thread(target=_show_lista, daemon=True).start()
+                return
+            elif intent == "correos":
+                threading.Thread(target=_show_correos, daemon=True).start()
+                return
+            elif intent == "estado":
+                _handle_message("/estado")
+                return
+
             if not GROQ_API_KEY:
-                log.warning("Mensaje libre recibido pero GROQ_API_KEY no está configurada.")
                 send_telegram_text(
                     "⚠️ La IA no está activada. Añade <code>GROQ_API_KEY</code> en las variables de Railway.\n\n"
                     + _HELP_TEXT
